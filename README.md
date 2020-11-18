@@ -36,7 +36,7 @@ Model selection:
 
 * Mike:
 
- *Kyla:
+* Kyla:
  
 Audience: technical, focused on methodology
 
