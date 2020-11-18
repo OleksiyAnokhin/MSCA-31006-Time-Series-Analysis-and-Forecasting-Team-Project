@@ -1,0 +1,212 @@
+---
+title: "Chicago Zillow Real Estate Prices (Time Series Team Project)"
+author: "Oleksiy Anokhin"
+date: "10/29/2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+```{r, message = FALSE, warning = FALSE}
+# Install packages
+library(tidyverse) # for general analysis
+library(fpp)
+# library(fpp2)
+library(fpp3) # for predictions 
+# Important notice: the latest package here is fpp3, but it does not work well sometimes with 'ts' data. 
+# https://stackoverflow.com/questions/64348121/error-objects-of-type-ts-not-supported-by-autoplot-cannot-knit-rmarkdown-pack
+# For example, I cannot use 'autoplot()' function for such data
+# Hence, I will use fpp2 for this assignment
+library(ggthemes) # for beautiful themes
+# library(tinytex) # for pdf documents
+# library(highcharter) # for beautiful charts
+library(TSA) # for TS analysis
+# library(readxl) # for xls files
+library(kableExtra) # for beautiful tables
+library(lubridate) # for time data
+library(tsibble) # for tsiblle data format
+# library(plotly) # for interactive charts
+library(caret) # for modeling
+
+# Set a theme
+theme_set(theme_minimal())
+
+# Remove scientific notation 
+options(scipen = 999)
+``` 
+
+### Chicago Sales Prices data
+
+#### Import data
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+sales <- read_csv("Metro_median_sale_price_raw_week.csv")
+
+# Check dimensions
+dim(sales)
+```
+
+#### Select Chicago data
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago_sales <- sales %>% filter(RegionName == "Chicago, IL")
+
+# Check dimensions
+dim(chicago_sales)
+```
+
+#### Preprocess data
+
+```{r, message = FALSE, warning = FALSE}
+# Convert data from wide to long format for proper analysis
+chicago_sales <- chicago_sales %>% 
+                 gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+                 select(RegionName, Date, Price) %>%
+                 rename(Metro_area = RegionName, Median_price = Price)
+
+# Check dimensions
+dim(chicago_sales)
+
+# Print
+kable(head(chicago_sales, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+chicago_sales$Date <- ymd(chicago_sales$Date)
+
+# Print
+kable(head(chicago_sales, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert to tsibble object for time series analysis
+chicago_sales <- as_tsibble(chicago_sales, key = Metro_area, index = Date)
+
+# Check dataframe class
+class(chicago_sales)
+```
+
+#### Plot Chicago sales price data
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the data
+chicago_sales %>% autoplot(Median_price, color = "#1277e1", size = 1) +
+                  labs(title = "Median Sale Price in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
+                  xlab("Weekly data by year") + ylab("Median Sale Price")
+```
+
+### Chicago Unemployment data
+
+#### Import data
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+unemployment_data <- read_csv("Unemployment Rate in Chicago-Naperville-Elgin (Fed).csv")
+
+# Print
+kable(head(unemployment_data, n = 5)) %>% kable_styling() 
+```
+
+#### Clean data
+
+```{r, message = FALSE, warning = FALSE}
+# Rename columns
+unemployment_data <- unemployment_data %>% rename(Date = DATE, Rate = CHIC917URN)
+
+# Print
+kable(head(unemployment_data, n = 5)) %>% kable_styling() 
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+# Check class
+class(unemployment_data)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert dataframe to tsibble
+unemployment_data <- as_tsibble(unemployment_data)
+
+# Check class again
+class(unemployment_data)
+```
+
+#### Plot unemployment data
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the initial data
+unemployment_data %>% autoplot(Rate, color = "#1277e1", size = 1) +
+                  labs(title = "Unemployment Rate in Chicago-Naperville-Elgin", subtitle = "February 2008 - August 2020") +
+                  xlab("Monthly data") + ylab("Unemployment rate")
+```
+
+### US Average Mortgage rate 
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+mortgage_data <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
+
+# Print
+kable(head(mortgage_data, n = 5)) %>% kable_styling() 
+```
+
+#### Clean data
+
+```{r, message = FALSE, warning = FALSE}
+# Rename columns
+mortgage_data <- mortgage_data %>% rename(Date = DATE, Rate = MORTGAGE30US)
+
+# Print
+kable(head(mortgage_data, n = 5)) %>% kable_styling() 
+```
+
+
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+mortgage_data$Date <- mdy(mortgage_data$Date)
+
+# Check class 
+class(mortgage_data)
+```
+
+
+
+```{r, message = FALSE, warning = FALSE}
+# Convert dataframe to tsibble
+mortgage_data <- as_tsibble(mortgage_data)
+```
+
+#### Plot mortgage data
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the initial data
+mortgage_data %>% autoplot(Rate, color = "#1277e1", size = 1) +
+                  labs(title = "30-Year Fixed US Mortgage Average Rate", subtitle = "February 2008 - August 2020") +
+                  xlab("Monthly data") + ylab("Mortgage rate")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
