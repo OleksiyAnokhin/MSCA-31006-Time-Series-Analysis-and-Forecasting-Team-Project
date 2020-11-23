@@ -30,7 +30,7 @@ Steps for data transformation:
 
 Model selection:
 
-* Oleksiy: ARMA, VAR models, explore Prophet
+* Oleksiy: ARMA, VAR models, explore Prophet, LSTM 
 
 * Chris: all models for Partial Train data
 

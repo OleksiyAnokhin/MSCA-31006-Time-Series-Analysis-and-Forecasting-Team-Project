@@ -9,7 +9,9 @@ output:
     toc_depth: 5
 ---
 
-### Packages
+### Intro
+
+#### Packages
 
 ```{r, message = FALSE, warning = FALSE}
 # Install packages
@@ -44,7 +46,9 @@ theme_set(theme_minimal())
 options(scipen = 999)
 ``` 
 
-[Prophet](https://facebook.github.io/prophet/) is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects. It works best with time series that have strong seasonal effects and several seasons of historical data. Prophet is robust to missing data and shifts in the trend, and typically handles outliers well.
+### Zillow data
+
+#### Import data
 
 ```{r, message = FALSE, warning = FALSE}
 # Read data
@@ -54,8 +58,10 @@ chicago <- read_csv("Zillow monthly raw data (full).csv")
 dim(chicago)
 ```
 
+#### Data manipulation
+
 ```{r, message = FALSE, warning = FALSE}
-# Read data
+# Pick Chicago only
 chicago <- chicago %>% filter(RegionName == "Chicago, IL")
 
 # Check dimensions
@@ -98,6 +104,8 @@ chicago <- chicago %>% dplyr::select(Date, Median_price)
 kable(head(chicago, n = 5)) %>% kable_styling() 
 ```
 
+#### Plot data
+
 ```{r, message = FALSE, warning = FALSE}
 # Convert to tsibble
 chicago <- as_tsibble(chicago)
@@ -108,16 +116,13 @@ chicago %>% autoplot(Median_price, color = "#1277e1", size = 1) +
                      xlab("Monthly data by year") + ylab("Median Sale Price")
 ```
 
-
-### Chicago Mortgage data
+### Mortgage data
 
 #### Import data
 
 Here we need to import data, which is report by the start of each month.
 
 Our average mortgage interest rate in the US ire reported on weekly basis, so we need to do additional manipulations. 
-
-### US Average Mortgage rate 
 
 ```{r, message = FALSE, warning = FALSE}
 # Read data
@@ -127,7 +132,7 @@ mortgage_data <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
 kable(head(mortgage_data, n = 5)) %>% kable_styling() 
 ```
 
-#### Clean data
+#### Data manipulation
 
 ```{r, message = FALSE, warning = FALSE}
 # Rename columns
@@ -137,8 +142,6 @@ mortgage_data <- mortgage_data %>% rename(Date = DATE, Rate = MORTGAGE30US)
 kable(head(mortgage_data, n = 5)) %>% kable_styling() 
 ```
 
-
-
 ```{r, message = FALSE, warning = FALSE}
 # Convert date from character to date
 mortgage_data$Date <- mdy(mortgage_data$Date)
@@ -147,14 +150,12 @@ mortgage_data$Date <- mdy(mortgage_data$Date)
 class(mortgage_data)
 ```
 
-
-
 ```{r, message = FALSE, warning = FALSE}
 # Convert dataframe to tsibble
 mortgage_data <- as_tsibble(mortgage_data)
 ```
 
-#### Plot mortgage data
+#### Plot data
 
 ```{r, message = FALSE, warning = FALSE}
 # Plot the initial data
@@ -177,10 +178,10 @@ mortgage_data_monthly <- mortgage_data_monthly %>% group_by(Month = as.Date(as.y
 mortgage_data_monthly$Average_rate <- round(mortgage_data_monthly$Average_rate, digits = 2)
                                                   
 # Print
-kable(head(mortgage_data_monthly, n = 5)) %>% kable_styling() 
+kable(head(mortgage_data_monthly, n = 5)) %>% kable_styling()
 ```
 
-#### Plot monthly mortgage data
+#### Plot data
 
 ```{r, message = FALSE, warning = FALSE}
 # Convert dataframe to tsibble
@@ -207,6 +208,101 @@ names(mortgage)[names(mortgage) == "mortgage_data_monthly$Average_rate"] <- "Ave
 kable(head(mortgage, n = 5)) %>% kable_styling() 
 ```
 
+### Stationarity
+
+#### ACF
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(chicago$Median_price)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(mortgage_data_monthly$Average_rate)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(log(chicago$Median_price))
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(log(mortgage_data_monthly$Average_rate))
+```
+
+As we can see, we have a strong autocorrelation in both cases - with initial and log data. 
+
+### Differencing
+
+#### 1st order differencing 
+
+```{r, message = FALSE, warning = FALSE}
+# 1st order for Median price
+Median_price_diff1 <- diff(chicago$Median_price, differences = 1)
+
+# ACF
+ggAcf(Median_price_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# 1st order for Average rate
+Average_rate_diff1 <- diff(mortgage_data_monthly$Average_rate, differences = 1)
+
+# ACF
+ggAcf(Average_rate_diff1)
+```
+
+After a first level differencing our median price data keeps a seasonal trend, but the average rate data looks better. 
+
+#### Tests for 1st order diff
+
+![](https://i.ibb.co/hK2j5FP/image.png)
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Average_rate_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Average_rate_diff1)
+```
+
+**According to our test results and the slide (106) by professor Abado, both variables are stationary.** 
+
+```{r, message = FALSE, warning = FALSE}
+length(chicago$Median_price)
+length(Median_price_diff1)
+```
+
+#### 2nd order differencing
+
+```{r, message = FALSE, warning = FALSE}
+# 2nd order for Median price
+Median_price_diff2 <- diff(chicago$Median_price, differences = 2)
+
+# ACF
+ggAcf(Median_price_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# 2nd order for Average rate
+Average_rate_diff2 <- diff(mortgage_data_monthly$Average_rate, differences = 2)
+
+# ACF
+ggAcf(Average_rate_diff2)
+```
+
+### Plot logs vs non-logs
+
 ```{r, message = FALSE, warning = FALSE}
 # Check class
 class(mortgage)
@@ -232,7 +328,6 @@ ggplot(mortgage, aes(log(Median_price), log(Average_rate))) +
 
 ```
 
-
 #### Plot log monthly mortgage data
 
 ```{r, message = FALSE, warning = FALSE}
@@ -251,79 +346,14 @@ chicago %>% autoplot(log(Median_price), color = "#1277e1", size = 1) +
 
 ### VAR model
 
-Create log variables
-
-```{r, message = FALSE, warning = FALSE}
-# Create logs
-Median_price_log <- log(chicago$Median_price)
-Average_rate_log <- log(mortgage_data_monthly$Average_rate)
-```
-
-Create a dataframe
-
-```{r, message = FALSE, warning = FALSE}
-# Create a dataframe
-var_df <- (cbind(Median_price_log, Average_rate_log))
-
-# Print dimensions
-dim(var_df)
-```
-
-Use `VARselect`
-
-```{r, message = FALSE, warning = FALSE}
-VARselect(var_df)
-```
-
-VAR(10) for AIC and VAR(2) for BIC
-
-```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR 10
-var_10_model <- VAR(var_df, p = 10, type = "both", season = 12) 
-
-summary(var_10_model)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR 2
-var_2_model <- VAR(var_df, p = 2, type = "both", season = 12) 
-
-summary(var_2_model)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Create a VAR(10) model
-x = cbind(log(chicago$Median_price), log(mortgage_data_monthly$Average_rate))
-plot.ts(x , main = "", xlab = "")
-fit_var10_model = VAR(x, p = 10, type = "both")
-summary(fit_var10_model)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Create a VAR(2) model
-x = cbind(log(chicago$Median_price), log(mortgage_data_monthly$Average_rate))
-plot.ts(x , main = "", xlab = "")
-fit_var2_model <- VAR(x, p = 2, type = "both")
-summary(fit_var2_model)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for VAR(10) model
-ggAcf(residuals(fit_var10_model)[, 1])
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for VAR(2) model
-ggAcf(residuals(fit_var2_model)[, 1])
-```
-
 #### VAR modelling with `ts()`
 
 ```{r, message = FALSE, warning = FALSE}
 # Define Median_price as ts
 Median_price_ts <- ts(chicago$Median_price, start = c(2008, 2), end = c(2020, 8), frequency = 12)
 
-dput(Median_price_ts)
+# Class
+class(Median_price_ts)
 
 # Print
 print(Median_price_ts)
@@ -334,7 +364,7 @@ print(Median_price_ts)
 Average_rate_ts <- ts(mortgage_data_monthly$Average_rate, start = c(2008, 2), end = c(2020, 8), frequency = 12)
 
 # Print
-dput(Average_rate_ts)
+class(Average_rate_ts)
 
 # Print
 print(Average_rate_ts)
@@ -346,11 +376,31 @@ var_df_ts <- VARselect(cbind(Median_price_ts, Average_rate_ts))
 
 # Print
 var_df_ts
+
+# Class
+class(var_df_ts)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
 # Define a VAR(10) model ts
-var_10_model_ts <- VAR(cbind(Median_price_ts, Average_rate_ts), p = 10, type = "both", season = 12) 
+class(Median_price_ts)
+class(Average_rate_ts)
+
+# Cbind
+var_df_ts <- cbind(Median_price_ts, Average_rate_ts) 
+
+# Class
+class(var_df_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+class(var_df_ts) <- c("mts", "ts")
+class(var_df_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(10) model ts
+var_10_model_ts <- VAR(var_df_ts, p = 10, type = "both", season = 12) 
 
 # Print summary
 summary(var_10_model_ts)
@@ -358,13 +408,98 @@ summary(var_10_model_ts)
 
 ```{r, message = FALSE, warning = FALSE}
 # Define a VAR(2) model ts
-var_2_model_ts <- VAR(cbind(Median_price_ts, Average_rate_ts), p = 2, type = "both", season = 12) 
+var_2_model_ts <- VAR(var_df_ts, p = 2, type = "both", season = 12) 
 
 # Print summary
 summary(var_2_model_ts)
 ```
 
-#### Create variables 
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(10) for Median_price_ts
+Median_price_ts_forecast_var_10 <- forecast(var_10_model_ts, h = 12)$forecast$Median_price_ts
+
+# Plot the forecast
+autoplot(Median_price_ts_forecast_var_10) + 
+        labs(title = "VAR 10 model forecast for Median Sale Price", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Median Sale Price")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(10) for Average_rate_ts
+Average_rate_ts_forecast_var_10 <- forecast(var_10_model_ts, h = 12)$forecast$Average_rate_ts
+
+# Plot the forecast
+autoplot(Average_rate_ts_forecast_var_10) + 
+        labs(title = "VAR 10 model forecast for Average Mortgage Rate", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Average Mortgage Rate")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(2) for Median_price_ts
+Median_price_ts_forecast_var_2 <- forecast(var_2_model_ts, h = 12)$forecast$Median_price_ts
+
+# Plot the forecast
+autoplot(Median_price_ts_forecast_var_2) + 
+        labs(title = "VAR 2 model forecast for Median Sale Price", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Median Sale Price")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(2) for Average_rate_ts
+Average_rate_ts_forecast_var_2 <- forecast(var_2_model_ts, h = 12)$forecast$Average_rate_ts
+
+# Plot the forecast
+autoplot(Average_rate_ts_forecast_var_2) + 
+        labs(title = "VAR 2 model forecast for Average Mortgage Rate", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Average Mortgage Rate")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(10) for Median_price_ts
+checkresiduals(var_10_model_ts$varresult$Median_price_ts, test = "LB", color = "maroon")
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(10) for Average_rate_ts
+checkresiduals(var_10_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(2) for Median_price_ts
+checkresiduals(var_2_model_ts$varresult$Median_price_ts, test = "LB", color = "maroon")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(2) for Average_rate_ts
+checkresiduals(var_2_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Log variables 
 
 ```{r, message = FALSE, warning = FALSE}
 # Create log variables
@@ -410,13 +545,28 @@ ggAcf(residuals(var_10_model_ts_log)[, 1])
 ggAcf(residuals(var_2_model_ts_log)[, 1])
 ```
 
-```{r, message = FALSE, warning = FALSE}
-class(Median_price_ts)
-class(Average_rate_ts)
+### Useful resources
 
-foo <- cbind(Median_price_ts, Average_rate_ts) 
-class(foo)
-```
+- [StackOverflow - VAR methodology](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology/195477#195477)
+
+- [Introduction to Econometrics with R - Vector Autoregressions](https://www.econometrics-with-r.org/16-1-vector-autoregressions.html)
+
+- [Forecasting: Principles and Practice](https://otexts.com/fpp3/VAR.html)
+
+- [Penn State - Vector Autoregressive models VAR(p) models](https://online.stat.psu.edu/stat510/lesson/11/11.2)
+
+- [VAR model tutorial](https://rpubs.com/bostonchopsticks/405570)
+
+- [Presentation](http://www.ams.sunysb.edu/~zhu/ams586/VAR_Lecture2.pdf)
+
+
+
+
+
+
+
+
+
 
 
 
