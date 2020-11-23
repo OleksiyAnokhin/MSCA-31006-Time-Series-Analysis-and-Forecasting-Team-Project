@@ -1,0 +1,201 @@
+---
+title: "TS Zillow Team Project"
+author: "Oleksiy Anokhin"
+date: "10/29/2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+### Packages
+
+```{r, message = FALSE, warning = FALSE}
+# Install packages
+library(tidyverse) # for general analysis
+library(fpp)
+# library(fpp2)
+library(fpp3) # for predictions 
+# Important notice: the latest package here is fpp3, but it does not work well sometimes with 'ts' data. 
+# https://stackoverflow.com/questions/64348121/error-objects-of-type-ts-not-supported-by-autoplot-cannot-knit-rmarkdown-pack
+# For example, I cannot use 'autoplot()' function for such data
+# Hence, I will use fpp2 for this assignment
+library(ggthemes) # for beautiful themes
+# library(tinytex) # for pdf documents
+# library(highcharter) # for beautiful charts
+library(TSA) # for TS analysis
+# library(readxl) # for xls files
+library(kableExtra) # for beautiful tables
+library(lubridate) # for time data
+library(tsibble) # for tsiblle data format
+# library(plotly) # for interactive charts
+library(caret) # for modeling
+library(prophet) # for TS analysis
+
+
+# Set a theme
+theme_set(theme_minimal())
+
+# Remove scientific notations for prices
+options(scipen = 999)
+``` 
+
+[Prophet](https://facebook.github.io/prophet/) is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects. It works best with time series that have strong seasonal effects and several seasons of historical data. Prophet is robust to missing data and shifts in the trend, and typically handles outliers well.
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago <- read_csv("Zillow monthly raw data (full).csv")
+
+# Check dimensions
+dim(chicago)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago <- chicago %>% filter(RegionName == "Chicago, IL")
+
+# Check dimensions
+dim(chicago)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert data from wide to long format for proper analysis
+chicago <- chicago %>% gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+                              select(RegionName, Date, Price) %>%
+                              rename(Metro_area = RegionName, Median_price = Price)
+
+# Check dimensions
+dim(chicago)
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Save long data
+# write.csv(chicago,"Chicago long.csv")
+```
+
+The `ds` column should be `YYYY-MM-DD` for a date, or `YYYY-MM-DD HH:MM:SS` for a `timestamp`. 
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+chicago$Date <- mdy(chicago$Date)
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Drop Metro area column
+chicago <- chicago %>% select(Date, Median_price) 
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Rename columns for Prophet analysis
+chicago_prophet <- chicago %>% rename(ds = Date, y = Median_price)
+
+# Print
+kable(head(chicago_prophet, n = 5)) %>% kable_styling() 
+```
+
+We call the `prophet` function to fit the model. The first argument is the historical dataframe. Additional arguments control how Prophet fits the data and are described in later pages of this documentation.
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model
+model1 <- prophet(chicago_prophet)
+
+# Print 
+summary(model1)
+```
+
+Predictions are made on a dataframe with a column `ds` containing the dates for which predictions are to be made. The `make_future_dataframe` function takes the model object and a number of periods to forecast and produces a suitable dataframe. By default it will also include the historical dates so we can evaluate in-sample fit.
+
+We have 156 data points in total since 2008. 
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+future <- make_future_dataframe(model1, periods = 12)
+
+# Print last 5 rows
+tail(future, 12)
+```
+
+As with most modeling procedures in R, we use the generic `predict` function to get our forecast. The forecast object is a dataframe with a column `yhat` containing the forecast. It has additional columns for uncertainty intervals and seasonal components.
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+forecast1 <- predict(model1, future)
+
+# Print 
+tail(forecast1[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+
+You can use the generic `plot` function to plot the forecast, by passing in the model and the forecast dataframe.
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the model
+plot(model1, forecast1)
+```
+
+You can use the `prophet_plot_components` function to see the forecast broken down into `trend`, `weekly seasonality`, and `yearly seasonality`.
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze components
+prophet_plot_components(model1, forecast1)
+```
+
+Prophet will by default fit weekly and yearly seasonalities, if the time series is more than two cycles long. It will also fit daily seasonality for a sub-daily time series. You can add other seasonalities (monthly, quarterly, hourly) using the add_seasonality function (R).
+
+The inputs to this function are a name, the period of the seasonality in days, and the Fourier order for the seasonality. For reference, by default Prophet uses a Fourier order of 3 for weekly seasonality and 10 for yearly seasonality. An optional input to add_seasonality is the prior scale for that seasonal component - this is discussed below.
+
+```{r, message = FALSE, warning = FALSE}
+# Remove weekly seasonality
+model1 <- prophet(weekly.seasonality = FALSE)
+
+# Add monthly seasonality
+model1 <- add_seasonality(model1, name = "monthly", period = 30.5, fourier.order = 5)
+
+# Fit the model
+model1 <- fit.prophet(model1, chicago_prophet)
+
+# Create a forecast
+forecast1 <- predict(model1, future)
+
+# Plot a forecast
+prophet_plot_components(model1, forecast1)
+```
+
+Prophet includes functionality for time series cross validation to measure forecast error using historical data. This is done by selecting cutoff points in the history, and for each of them fitting the model using data only up to that cutoff point. We can then compare the forecasted values to the actual values.
+
+This cross validation procedure can be done automatically for a range of historical cutoffs using the `cross_validation` function. We specify the forecast horizon (`horizon`), and then optionally the size of the initial training period (`initial`) and the spacing between cutoff dates (`period`). By default, the initial training period is set to three times the horizon, and cutoffs are made every half a horizon.
+
+The output of `cross_validation` is a dataframe with the true values y and the out-of-sample forecast values yhat, at each simulated forecast date and for each cutoff date. In particular, a forecast is made for every observed point between cutoff and cutoff + horizon. This dataframe can then be used to compute error measures of `yhat` vs. `y`.
+
+```{r, message = FALSE, warning = FALSE}
+# Cross-validate the model
+model1_cv <- cross_validation(model1, initial = 156, period = 365/12, as.difftime(horizon = 365/12, units = "days"))
+
+# Print
+# head(model1_cv)
+```
+
+However, Prophet has some problems with cross validation of months, it is only available for days.
+
+- https://github.com/facebook/prophet/issues/1351
+- https://github.com/facebook/prophet/issues/949
+- https://github.com/facebook/prophet/issues/586
+
+Cross-validation link
+
+https://facebook.github.io/prophet/docs/diagnostics.html
+
+
+
+
+
+

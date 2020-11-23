@@ -1,0 +1,424 @@
+---
+title: "TS Zillow Team Project (VAR model)"
+author: "Oleksiy Anokhin"
+date: "10/29/2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+### Packages
+
+```{r, message = FALSE, warning = FALSE}
+# Install packages
+library(tidyverse) # for general analysis
+library(fpp)
+# library(fpp2)
+library(fpp3) # for predictions 
+# Important notice: the latest package here is fpp3, but it does not work well sometimes with 'ts' data. 
+# https://stackoverflow.com/questions/64348121/error-objects-of-type-ts-not-supported-by-autoplot-cannot-knit-rmarkdown-pack
+# For example, I cannot use 'autoplot()' function for such data
+# Hence, I will use fpp2 for this assignment
+library(ggthemes) # for beautiful themes
+# library(tinytex) # for pdf documents
+# library(highcharter) # for beautiful charts
+library(TSA) # for TS analysis
+# library(readxl) # for xls files
+library(kableExtra) # for beautiful tables
+library(lubridate) # for time data
+library(tsibble) # for tsiblle data format
+# library(plotly) # for interactive charts
+library(caret) # for modeling
+library(prophet) # for TS analysis
+library(lubridate)
+library(zoo)
+library(vars)
+library(stats)
+
+# Set a theme
+theme_set(theme_minimal())
+
+# Remove scientific notations for prices
+options(scipen = 999)
+``` 
+
+[Prophet](https://facebook.github.io/prophet/) is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects. It works best with time series that have strong seasonal effects and several seasons of historical data. Prophet is robust to missing data and shifts in the trend, and typically handles outliers well.
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago <- read_csv("Zillow monthly raw data (full).csv")
+
+# Check dimensions
+dim(chicago)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago <- chicago %>% filter(RegionName == "Chicago, IL")
+
+# Check dimensions
+dim(chicago)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert data from wide to long format for proper analysis
+chicago <- chicago %>% gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+                       dplyr::select(RegionName, Date, Price) %>%
+                       rename(Metro_area = RegionName, Median_price = Price)
+                              
+# Check dimensions
+dim(chicago)
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Save long data
+# write.csv(chicago,"Chicago long.csv")
+```
+
+The `ds` column should be `YYYY-MM-DD` for a date, or `YYYY-MM-DD HH:MM:SS` for a `timestamp`. 
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+chicago$Date <- mdy(chicago$Date)
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Drop Metro area column
+chicago <- chicago %>% dplyr::select(Date, Median_price) 
+
+# Print
+kable(head(chicago, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert to tsibble
+chicago <- as_tsibble(chicago)
+
+# Plot data
+chicago %>% autoplot(Median_price, color = "#1277e1", size = 1) +
+                     labs(title = "Median Sale Price in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
+                     xlab("Monthly data by year") + ylab("Median Sale Price")
+```
+
+
+### Chicago Mortgage data
+
+#### Import data
+
+Here we need to import data, which is report by the start of each month.
+
+Our average mortgage interest rate in the US ire reported on weekly basis, so we need to do additional manipulations. 
+
+### US Average Mortgage rate 
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+mortgage_data <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
+
+# Print
+kable(head(mortgage_data, n = 5)) %>% kable_styling() 
+```
+
+#### Clean data
+
+```{r, message = FALSE, warning = FALSE}
+# Rename columns
+mortgage_data <- mortgage_data %>% rename(Date = DATE, Rate = MORTGAGE30US)
+
+# Print
+kable(head(mortgage_data, n = 5)) %>% kable_styling() 
+```
+
+
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+mortgage_data$Date <- mdy(mortgage_data$Date)
+
+# Check class 
+class(mortgage_data)
+```
+
+
+
+```{r, message = FALSE, warning = FALSE}
+# Convert dataframe to tsibble
+mortgage_data <- as_tsibble(mortgage_data)
+```
+
+#### Plot mortgage data
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the initial data
+mortgage_data %>% autoplot(Rate, color = "#1277e1", size = 1) +
+                  labs(title = "30-Year Fixed US Mortgage Average Rate", subtitle = "February 2008 - August 2020") +
+                  xlab("Weekly data") + ylab("Mortgage rate")
+```
+
+#### Group by month
+
+```{r, message = FALSE, warning = FALSE}
+# Read the data again
+mortgage_data_monthly <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
+
+# Convert data to months
+mortgage_data_monthly <- mortgage_data_monthly %>% group_by(Month = as.Date(as.yearmon(mdy(DATE)), 1)) %>% 
+                                                   summarise(Average_rate = mean(MORTGAGE30US))
+
+# Round data
+mortgage_data_monthly$Average_rate <- round(mortgage_data_monthly$Average_rate, digits = 2)
+                                                  
+# Print
+kable(head(mortgage_data_monthly, n = 5)) %>% kable_styling() 
+```
+
+#### Plot monthly mortgage data
+
+```{r, message = FALSE, warning = FALSE}
+# Convert dataframe to tsibble
+mortgage_data_monthly <- as_tsibble(mortgage_data_monthly)
+
+# # Plot the initial data
+mortgage_data_monthly %>% autoplot(Average_rate, color = "#1277e1", size = 1) +
+                          labs(title = "30-Year Fixed US Mortgage Average Monthly Rate", subtitle = "February 2008 - August 2020") +
+                          xlab("Monthly data") + ylab("Mortgage rate")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a new dataframe
+mortgage <- cbind(chicago, mortgage_data_monthly$Average_rate)
+
+# Check dimensions
+dim(mortgage)
+
+# Rename
+# mortgage <- mortgage %>% rename(Monthly_rate = Average_rate)
+names(mortgage)[names(mortgage) == "mortgage_data_monthly$Average_rate"] <- "Average_rate"
+
+# Print
+kable(head(mortgage, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check class
+class(mortgage)
+
+# Plot the correlation
+ggplot(mortgage, aes(Median_price, Average_rate)) +
+       geom_point(color = "maroon") +
+       geom_smooth(method = "lm", color = "darkgreen") +
+       labs(title = "Correlation of Median Sales Price and monthly average US mortgage rate",
+              subtitle = "February 2008 - August 2020") +
+       xlab("Median Sales Price") + ylab("Average mortgage rate")
+
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the correlation
+ggplot(mortgage, aes(log(Median_price), log(Average_rate))) +
+       geom_point(color = "maroon") +
+       geom_smooth(method = "lm", color = "darkgreen") +
+       labs(title = "Correlation of log Median sales price and log monthly average US mortgage rate",
+              subtitle = "February 2008 - August 2020") +
+       xlab("Median Sales Price") + ylab("Average mortgage rate")
+
+```
+
+
+#### Plot log monthly mortgage data
+
+```{r, message = FALSE, warning = FALSE}
+# # Plot the initial data
+mortgage_data_monthly %>% autoplot(log(Average_rate), color = "#1277e1", size = 1) +
+                          labs(title = "30-Year Fixed US Mortgage Average Monthly Rate (log)", subtitle = "February 2008 - August 2020") +
+                          xlab("Monthly data") + ylab("log(Mortgage rate)")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# # Plot the initial data
+chicago %>% autoplot(log(Median_price), color = "#1277e1", size = 1) +
+                         labs(title = "Median Sale Price in Chicago Metro Area (log)", subtitle = "February 2008 - August 2020") +
+                         xlab("Monthly data") + ylab("log(Median sale price)")
+```
+
+### VAR model
+
+Create log variables
+
+```{r, message = FALSE, warning = FALSE}
+# Create logs
+Median_price_log <- log(chicago$Median_price)
+Average_rate_log <- log(mortgage_data_monthly$Average_rate)
+```
+
+Create a dataframe
+
+```{r, message = FALSE, warning = FALSE}
+# Create a dataframe
+var_df <- (cbind(Median_price_log, Average_rate_log))
+
+# Print dimensions
+dim(var_df)
+```
+
+Use `VARselect`
+
+```{r, message = FALSE, warning = FALSE}
+VARselect(var_df)
+```
+
+VAR(10) for AIC and VAR(2) for BIC
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR 10
+var_10_model <- VAR(var_df, p = 10, type = "both", season = 12) 
+
+summary(var_10_model)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR 2
+var_2_model <- VAR(var_df, p = 2, type = "both", season = 12) 
+
+summary(var_2_model)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a VAR(10) model
+x = cbind(log(chicago$Median_price), log(mortgage_data_monthly$Average_rate))
+plot.ts(x , main = "", xlab = "")
+fit_var10_model = VAR(x, p = 10, type = "both")
+summary(fit_var10_model)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a VAR(2) model
+x = cbind(log(chicago$Median_price), log(mortgage_data_monthly$Average_rate))
+plot.ts(x , main = "", xlab = "")
+fit_var2_model <- VAR(x, p = 2, type = "both")
+summary(fit_var2_model)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for VAR(10) model
+ggAcf(residuals(fit_var10_model)[, 1])
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for VAR(2) model
+ggAcf(residuals(fit_var2_model)[, 1])
+```
+
+#### VAR modelling with `ts()`
+
+```{r, message = FALSE, warning = FALSE}
+# Define Median_price as ts
+Median_price_ts <- ts(chicago$Median_price, start = c(2008, 2), end = c(2020, 8), frequency = 12)
+
+dput(Median_price_ts)
+
+# Print
+print(Median_price_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define Average_rate as ts
+Average_rate_ts <- ts(mortgage_data_monthly$Average_rate, start = c(2008, 2), end = c(2020, 8), frequency = 12)
+
+# Print
+dput(Average_rate_ts)
+
+# Print
+print(Average_rate_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Use Var select
+var_df_ts <- VARselect(cbind(Median_price_ts, Average_rate_ts))
+
+# Print
+var_df_ts
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(10) model ts
+var_10_model_ts <- VAR(cbind(Median_price_ts, Average_rate_ts), p = 10, type = "both", season = 12) 
+
+# Print summary
+summary(var_10_model_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(2) model ts
+var_2_model_ts <- VAR(cbind(Median_price_ts, Average_rate_ts), p = 2, type = "both", season = 12) 
+
+# Print summary
+summary(var_2_model_ts)
+```
+
+#### Create variables 
+
+```{r, message = FALSE, warning = FALSE}
+# Create log variables
+Median_price_ts_log <- log(Median_price_ts)
+Average_rate_ts_log <- log(Average_rate_ts)
+
+# Print
+head(Median_price_ts_log)
+head(Average_rate_ts_log)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Use Var select
+var_df_ts_log <- VARselect(cbind(Median_price_ts_log, Average_rate_ts_log))
+
+# Print
+var_df_ts_log
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(10) model ts
+var_10_model_ts_log <- VAR(cbind(Median_price_ts_log, Average_rate_ts_log), p = 10, type = "both", season = 12) 
+
+# Print summary
+summary(var_10_model_ts_log)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(2) model ts
+var_2_model_ts_log <- VAR(cbind(Median_price_ts_log, Average_rate_ts_log), p = 2, type = "both", season = 12) 
+
+# Print summary
+summary(var_2_model_ts_log)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for VAR(10) log model
+ggAcf(residuals(var_10_model_ts_log)[, 1])
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for VAR(10) log model
+ggAcf(residuals(var_2_model_ts_log)[, 1])
+```
+
+```{r, message = FALSE, warning = FALSE}
+class(Median_price_ts)
+class(Average_rate_ts)
+
+foo <- cbind(Median_price_ts, Average_rate_ts) 
+class(foo)
+```
+
+
+
+
+
