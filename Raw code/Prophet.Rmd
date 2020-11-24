@@ -9,7 +9,7 @@ output:
     toc_depth: 5
 ---
 
-### Packages
+### Intro
 
 ```{r, message = FALSE, warning = FALSE}
 # Install packages
@@ -32,7 +32,7 @@ library(tsibble) # for tsiblle data format
 # library(plotly) # for interactive charts
 library(caret) # for modeling
 library(prophet) # for TS analysis
-
+library(tibbletime)
 
 # Set a theme
 theme_set(theme_minimal())
@@ -40,6 +40,10 @@ theme_set(theme_minimal())
 # Remove scientific notations for prices
 options(scipen = 999)
 ``` 
+
+### Full data
+
+#### Import data
 
 [Prophet](https://facebook.github.io/prophet/) is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects. It works best with time series that have strong seasonal effects and several seasons of historical data. Prophet is robust to missing data and shifts in the trend, and typically handles outliers well.
 
@@ -50,6 +54,8 @@ chicago <- read_csv("Zillow monthly raw data (full).csv")
 # Check dimensions
 dim(chicago)
 ```
+
+#### Data manipulation
 
 ```{r, message = FALSE, warning = FALSE}
 # Read data
@@ -62,7 +68,7 @@ dim(chicago)
 ```{r, message = FALSE, warning = FALSE}
 # Convert data from wide to long format for proper analysis
 chicago <- chicago %>% gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
-                              select(RegionName, Date, Price) %>%
+                              dplyr::select(RegionName, Date, Price) %>%
                               rename(Metro_area = RegionName, Median_price = Price)
 
 # Check dimensions
@@ -70,11 +76,6 @@ dim(chicago)
 
 # Print
 kable(head(chicago, n = 5)) %>% kable_styling() 
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Save long data
-# write.csv(chicago,"Chicago long.csv")
 ```
 
 The `ds` column should be `YYYY-MM-DD` for a date, or `YYYY-MM-DD HH:MM:SS` for a `timestamp`. 
@@ -89,7 +90,7 @@ kable(head(chicago, n = 5)) %>% kable_styling()
 
 ```{r, message = FALSE, warning = FALSE}
 # Drop Metro area column
-chicago <- chicago %>% select(Date, Median_price) 
+chicago <- chicago %>% dplyr::select(Date, Median_price) 
 
 # Print
 kable(head(chicago, n = 5)) %>% kable_styling() 
@@ -102,6 +103,8 @@ chicago_prophet <- chicago %>% rename(ds = Date, y = Median_price)
 # Print
 kable(head(chicago_prophet, n = 5)) %>% kable_styling() 
 ```
+
+#### Modelling
 
 We call the `prophet` function to fit the model. The first argument is the historical dataframe. Additional arguments control how Prophet fits the data and are described in later pages of this documentation.
 
@@ -125,6 +128,8 @@ future <- make_future_dataframe(model1, periods = 12)
 tail(future, 12)
 ```
 
+#### Forecasting
+
 As with most modeling procedures in R, we use the generic `predict` function to get our forecast. The forecast object is a dataframe with a column `yhat` containing the forecast. It has additional columns for uncertainty intervals and seasonal components.
 
 ```{r, message = FALSE, warning = FALSE}
@@ -141,6 +146,8 @@ You can use the generic `plot` function to plot the forecast, by passing in the 
 # Plot the model
 plot(model1, forecast1)
 ```
+
+#### Trend and seasonality
 
 You can use the `prophet_plot_components` function to see the forecast broken down into `trend`, `weekly seasonality`, and `yearly seasonality`.
 
@@ -170,6 +177,8 @@ forecast1 <- predict(model1, future)
 prophet_plot_components(model1, forecast1)
 ```
 
+#### Cross-validation
+
 Prophet includes functionality for time series cross validation to measure forecast error using historical data. This is done by selecting cutoff points in the history, and for each of them fitting the model using data only up to that cutoff point. We can then compare the forecasted values to the actual values.
 
 This cross validation procedure can be done automatically for a range of historical cutoffs using the `cross_validation` function. We specify the forecast horizon (`horizon`), and then optionally the size of the initial training period (`initial`) and the spacing between cutoff dates (`period`). By default, the initial training period is set to three times the horizon, and cutoffs are made every half a horizon.
@@ -178,21 +187,208 @@ The output of `cross_validation` is a dataframe with the true values y and the o
 
 ```{r, message = FALSE, warning = FALSE}
 # Cross-validate the model
-model1_cv <- cross_validation(model1, initial = 156, period = 365/12, as.difftime(horizon = 365/12, units = "days"))
-
-# Print
-# head(model1_cv)
+model1_cv <- cross_validation(model1, horizon = 365/12, units = "days", period = 365/12, initial = 365/12 * 12 * 3)
 ```
 
-However, Prophet has some problems with cross validation of months, it is only available for days.
+```{r, message = FALSE, warning = FALSE}
+# Print
+model1_cv
+```
+
+#### CV plot
+
+```{r, message = FALSE, warning = FALSE}
+# Define colors manually
+colors <- c("Actual" = "#1277e1", "Predicted" = "darkorange")
+
+# Plot data
+ggplot(model1_cv, aes(x = ds)) + geom_line(aes(y = y, color = "Actual"), size = 1) + 
+                                 geom_line(aes(y = yhat, color = "Predicted"), size = 1) +
+                                 labs(title = "Median Sale Price in Chicago (actual vs predicted)", subtitle = "February 2008 - August 2020") +
+                                 xlab("Monthy data") + 
+                                 ylab("Median Sale Price") + 
+                                 scale_color_manual(values = colors)
+```
+
+### Short data
+
+#### Import data
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago_short <- read_csv("Zillow monthly raw data (since March 2013).csv")
+
+# Check dimensions
+dim(chicago_short)
+```
+
+#### Data manipulation
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago_short <- chicago_short %>% filter(RegionName == "Chicago, IL")
+
+# Check dimensions
+dim(chicago_short)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Convert data from wide to long format for proper analysis
+chicago_short <- chicago_short %>% gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+                                   dplyr::select(RegionName, Date, Price) %>%
+                                   rename(Metro_area = RegionName, Median_price = Price)
+
+# Check dimensions
+dim(chicago_short)
+
+# Print
+kable(head(chicago_short, n = 5)) %>% kable_styling() 
+```
+
+The `ds` column should be `YYYY-MM-DD` for a date, or `YYYY-MM-DD HH:MM:SS` for a `timestamp`. 
+
+```{r, message = FALSE, warning = FALSE}
+# Convert date from character to date
+chicago_short$Date <- mdy(chicago_short$Date)
+
+# Print
+kable(head(chicago_short, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Drop Metro area column
+chicago_short <- chicago_short %>% dplyr::select(Date, Median_price) 
+
+# Print
+kable(head(chicago_short, n = 5)) %>% kable_styling() 
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Rename columns for Prophet analysis
+chicago_short_prophet <- chicago_short %>% rename(ds = Date, y = Median_price)
+
+# Print
+kable(head(chicago_short_prophet, n = 5)) %>% kable_styling() 
+```
+
+#### Modelling
+
+We call the `prophet` function to fit the model. The first argument is the historical dataframe. Additional arguments control how Prophet fits the data and are described in later pages of this documentation.
+
+```{r, message = FALSE, warning = FALSE}
+# Fit the model
+model2 <- prophet(chicago_short_prophet)
+
+# Print 
+summary(model2)
+```
+
+Predictions are made on a dataframe with a column `ds` containing the dates for which predictions are to be made. The `make_future_dataframe` function takes the model object and a number of periods to forecast and produces a suitable dataframe. By default it will also include the historical dates so we can evaluate in-sample fit.
+
+We have 90 data points in total since 2013. 
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+future_short <- make_future_dataframe(model2, periods = 12)
+
+# Print last 5 rows
+tail(future_short, 12)
+```
+
+#### Forecasting
+
+As with most modeling procedures in R, we use the generic `predict` function to get our forecast. The forecast object is a dataframe with a column `yhat` containing the forecast. It has additional columns for uncertainty intervals and seasonal components.
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+forecast2 <- predict(model2, future_short)
+
+# Print 
+head(forecast2[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+
+You can use the generic `plot` function to plot the forecast, by passing in the model and the forecast dataframe.
+
+```{r, message = FALSE, warning = FALSE}
+# Plot the model
+plot(model2, forecast2)
+```
+
+#### Trend and seasonality
+
+You can use the `prophet_plot_components` function to see the forecast broken down into `trend`, `weekly seasonality`, and `yearly seasonality`.
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze components
+prophet_plot_components(model2, forecast2)
+```
+
+Prophet will by default fit weekly and yearly seasonalities, if the time series is more than two cycles long. It will also fit daily seasonality for a sub-daily time series. You can add other seasonalities (monthly, quarterly, hourly) using the add_seasonality function (R).
+
+The inputs to this function are a name, the period of the seasonality in days, and the Fourier order for the seasonality. For reference, by default Prophet uses a Fourier order of 3 for weekly seasonality and 10 for yearly seasonality. An optional input to add_seasonality is the prior scale for that seasonal component - this is discussed below.
+
+```{r, message = FALSE, warning = FALSE}
+# Remove weekly seasonality
+model2 <- prophet(weekly.seasonality = FALSE)
+
+# Add monthly seasonality
+model2 <- add_seasonality(model2, name = "monthly", period = 30.5, fourier.order = 5)
+
+# Fit the model
+model2 <- fit.prophet(model2, chicago_short_prophet)
+
+# Create a forecast
+forecast2 <- predict(model2, future_short)
+
+# Plot a forecast
+prophet_plot_components(model2, forecast2)
+```
+
+#### Cross-validation
+
+Prophet includes functionality for time series cross validation to measure forecast error using historical data. This is done by selecting cutoff points in the history, and for each of them fitting the model using data only up to that cutoff point. We can then compare the forecasted values to the actual values.
+
+This cross validation procedure can be done automatically for a range of historical cutoffs using the `cross_validation` function. We specify the forecast horizon (`horizon`), and then optionally the size of the initial training period (`initial`) and the spacing between cutoff dates (`period`). By default, the initial training period is set to three times the horizon, and cutoffs are made every half a horizon.
+
+The output of `cross_validation` is a dataframe with the true values y and the out-of-sample forecast values yhat, at each simulated forecast date and for each cutoff date. In particular, a forecast is made for every observed point between cutoff and cutoff + horizon. This dataframe can then be used to compute error measures of `yhat` vs. `y`.
+
+```{r, message = FALSE, warning = FALSE}
+# Cross-validate the model
+model2_cv <- cross_validation(model2, horizon = 365/12, units = "days", period = 365/12, initial = 365/12 * 12 * 3)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print
+model2_cv
+```
+
+#### CV plot
+
+```{r, message = FALSE, warning = FALSE}
+# Define colors manually
+colors <- c("Actual" = "#1277e1", "Predicted" = "darkorange")
+
+# Plot data
+ggplot(model2_cv, aes(x = ds)) + geom_line(aes(y = y, color = "Actual"), size = 1) + 
+                                 geom_line(aes(y = yhat, color = "Predicted"), size = 1) +
+                                 labs(title = "Median Sale Price in Chicago (actual vs predicted)", subtitle = "March 2013 - August 2020") +
+                                 xlab("Monthy data") + 
+                                 ylab("Median Sale Price") + 
+                                 scale_color_manual(values = colors)
+```
+
+### Additional information
+
+Prophet has some problems with cross validation of months, it is only available for days. There are multiple issues on GitHub about it:
 
 - https://github.com/facebook/prophet/issues/1351
 - https://github.com/facebook/prophet/issues/949
 - https://github.com/facebook/prophet/issues/586
 
-Cross-validation link
+Cross-validation: 
 
-https://facebook.github.io/prophet/docs/diagnostics.html
+- https://facebook.github.io/prophet/docs/diagnostics.html
+- https://stackoverflow.com/questions/64959952/evaluating-prophet-model-in-r-using-cross-validation
 
 
 
