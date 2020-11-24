@@ -325,7 +325,6 @@ ggplot(mortgage, aes(log(Median_price), log(Average_rate))) +
        labs(title = "Correlation of log Median sales price and log monthly average US mortgage rate",
               subtitle = "February 2008 - August 2020") +
        xlab("Median Sales Price") + ylab("Average mortgage rate")
-
 ```
 
 #### Plot log monthly mortgage data
@@ -371,36 +370,27 @@ print(Average_rate_ts)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Use Var select
-var_df_ts <- VARselect(cbind(Median_price_ts, Average_rate_ts))
+# Create a ts dataframe
+chicago_df_ts <- cbind(Median_price_ts, Average_rate_ts)
 
-# Print
-var_df_ts
+# Check class
+class(chicago_df_ts)
 
-# Class
-class(var_df_ts)
+# Coerce class
+class(chicago_df_ts) <- c("mts", "ts")
+
+# Check class
+class(chicago_df_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+VARselect(chicago_df_ts)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
 # Define a VAR(10) model ts
-class(Median_price_ts)
-class(Average_rate_ts)
-
-# Cbind
-var_df_ts <- cbind(Median_price_ts, Average_rate_ts) 
-
-# Class
-class(var_df_ts)
-```
-
-```{r, message = FALSE, warning = FALSE}
-class(var_df_ts) <- c("mts", "ts")
-class(var_df_ts)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Define a VAR(10) model ts
-var_10_model_ts <- VAR(var_df_ts, p = 10, type = "both", season = 12) 
+var_10_model_ts <- VAR(chicago_df_ts, p = 10, type = "both", season = 12) 
 
 # Print summary
 summary(var_10_model_ts)
@@ -408,7 +398,7 @@ summary(var_10_model_ts)
 
 ```{r, message = FALSE, warning = FALSE}
 # Define a VAR(2) model ts
-var_2_model_ts <- VAR(var_df_ts, p = 2, type = "both", season = 12) 
+var_2_model_ts <- VAR(chicago_df_ts, p = 2, type = "both", season = 12) 
 
 # Print summary
 summary(var_2_model_ts)
@@ -459,7 +449,6 @@ autoplot(Average_rate_ts_forecast_var_2) +
 checkresiduals(var_10_model_ts$varresult$Median_price_ts, test = "LB", color = "maroon")
 ```
 
-
 ```{r, message = FALSE, warning = FALSE}
 # Check residuals for model VAr(10) for Average_rate_ts
 checkresiduals(var_10_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
@@ -475,29 +464,196 @@ checkresiduals(var_2_model_ts$varresult$Median_price_ts, test = "LB", color = "m
 checkresiduals(var_2_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
 ```
 
+#### VAR 1st order differenced
+
+```{r, message = FALSE, warning = FALSE}
+# First order differencing
+Median_price_ts_diff1 <- diff(Median_price_ts, differences = 1)
+
+# Print
+Median_price_diff1
+
+# Check class
+class(Median_price_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# First order differencing
+Average_rate_ts_diff1 <- diff(Average_rate_ts, differences = 1)
+
+# Print
+Average_rate_ts_diff1
+
+# Check class
+class(Average_rate_ts_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a ts dataframe
+chicago_df_diff1_ts <- cbind(Median_price_ts_diff1, Average_rate_ts_diff1)
+
+# Check class
+class(chicago_df_diff1_ts)
+
+# Coerce class
+class(chicago_df_diff1_ts) <- c("mts", "ts")
+
+# Check class
+class(chicago_df_diff1_ts)
+```
 
 
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+VARselect(chicago_df_diff1_ts)
+```
 
+We can see that after the first level of differencing `VARselect` offers us different models. 
 
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(9) model ts diff1
+var_9_model_ts_diff1 <- VAR(chicago_df_diff1_ts, p = 9, type = "both", season = 12) 
 
+# Print summary
+summary(var_9_model_ts_diff1)
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(1) model ts
+var_1_model_ts_diff1 <- VAR(chicago_df_diff1_ts, p = 1, type = "both", season = 12) 
 
+# Print summary
+summary(var_1_model_ts_diff1)
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(9) for Median_price_ts
+Median_price_ts_forecast_var_9_diff1 <- forecast(var_9_model_ts_diff1, h = 12)$forecast$Median_price_ts_diff1
 
+# Plot the forecast
+autoplot(Median_price_ts_forecast_var_9_diff1) + 
+        labs(title = "VAR 9 model forecast for Median Sale Price (Diff1)", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Median Sale Price")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(9) for Average_rate_ts
+Average_rate_ts_forecast_var_9_diff1 <- forecast(var_9_model_ts_diff1, h = 12)$forecast$Average_rate_ts_diff1
 
+# Plot the forecast
+autoplot(Average_rate_ts_forecast_var_9_diff1) + 
+        labs(title = "VAR 9 model forecast for Average Mortgage Rate (Diff1)", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Average Mortgage Rate")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(1) for Median_price_ts
+Median_price_ts_forecast_var_1_diff1 <- forecast(var_1_model_ts_diff1, h = 12)$forecast$Median_price_ts_diff1
 
+# Plot the forecast
+autoplot(Median_price_ts_forecast_var_1_diff1) + 
+        labs(title = "VAR 1 model forecast for Median Sale Price (Diff1)", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Median Sale Price")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Fit the model VAR(1) for Average_rate_ts
+Average_rate_ts_forecast_var_1_diff1 <- forecast(var_1_model_ts_diff1, h = 12)$forecast$Average_rate_ts_diff1
 
+# Plot the forecast
+autoplot(Average_rate_ts_forecast_var_1_diff1) + 
+        labs(title = "VAR 1 model forecast for Average Mortgage Rate (Diff1)", subtitle = "February 2008 - August 2020") +
+        xlab("Monthly data") + ylab("Average Mortgage Rate")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(9) for Median_price_ts
+checkresiduals(var_9_model_ts_diff1$varresult$Median_price_ts_diff1, test = "LB", color = "maroon")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(9) for Average_rate_ts
+checkresiduals(var_9_model_ts_diff1$varresult$Average_rate_ts_diff1, test = "LB", color = "maroon")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(1) for Median_price_ts
+checkresiduals(var_1_model_ts_diff1$varresult$Median_price_ts_diff1, test = "LB", color = "maroon")
+```
 
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for model VAr(1) for Average_rate_ts
+checkresiduals(var_1_model_ts_diff1$varresult$Average_rate_ts_diff1, test = "LB", color = "maroon")
+```
 
+### Var 2nd order differencing
 
+Here I will try to apply the second level differencing for both variables. 
 
+```{r, message = FALSE, warning = FALSE}
+# Second order differencing
+Median_price_ts_diff2 <- diff(Median_price_ts, differences = 2)
 
+# Print
+Median_price_diff2
+
+# Check class
+class(Median_price_diff2)
+
+# ACF
+ggAcf(Median_price_ts_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# First order differencing
+Average_rate_ts_diff2 <- diff(Average_rate_ts, differences = 2)
+
+# Print
+Average_rate_ts_diff2
+
+# Check class
+class(Average_rate_ts_diff2)
+
+# ACF
+ggAcf(Average_rate_ts_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a ts dataframe
+chicago_df_diff2_ts <- cbind(Median_price_ts_diff2, Average_rate_ts_diff2)
+
+# Check class
+class(chicago_df_diff2_ts)
+
+# Coerce class
+class(chicago_df_diff2_ts) <- c("mts", "ts")
+
+# Check class
+class(chicago_df_diff2_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+VARselect(chicago_df_diff2_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(10) model ts
+var_10_model_ts_diff2 <- VAR(chicago_df_diff2_ts, p = 10, type = "both", season = 12) 
+
+# Print summary
+summary(var_10_model_ts_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define a VAR(2) model ts
+var_2_model_ts_diff2 <- VAR(chicago_df_diff2_ts, p = 2, type = "both", season = 12) 
+
+# Print summary
+summary(var_2_model_ts_diff2)
+```
+
+As we can see, our model with the second order differencing performs even worse than 1st order, so it does not make sense to plot and forecast it for now. 
 
 #### Log variables 
 
