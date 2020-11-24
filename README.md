@@ -30,13 +30,13 @@ Steps for data transformation:
 
 Model selection:
 
-* Oleksiy: ARMA, VAR models, explore Prophet, LSTM 
+* Oleksiy: ARMA, VAR (issues with forecasting format), Prophet (issues with CV of monthly data), LSTM (not worth of it, 150 data points at max)
 
 * Chris: all models for Partial Train data
 
-* Mike:
+* Mike: CV model
 
-* Kyla:
+* Kyla: TBD
  
 Audience: technical, focused on methodology
 
