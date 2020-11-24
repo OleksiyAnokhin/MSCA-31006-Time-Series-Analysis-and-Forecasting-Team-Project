@@ -1,5 +1,5 @@
 ---
-title: "TS Zillow Team Project"
+title: "TS Zillow Team Project (Prophet)"
 author: "Oleksiy Anokhin"
 date: "10/29/2020"
 output:
@@ -210,6 +210,16 @@ ggplot(model1_cv, aes(x = ds)) + geom_line(aes(y = y, color = "Actual"), size = 
                                  scale_color_manual(values = colors)
 ```
 
+The `performance_metrics` utility can be used to compute some useful statistics of the prediction performance (`yhat`, `yhat_lower`, and `yhat_upper` compared to y), as a function of the distance from the cutoff (how far into the future the prediction was). The statistics computed are mean squared error (`MSE`), root mean squared error (`RMSE`), mean absolute error (`MAE`), mean absolute percent error (`MAPE`), median absolute percent error (`MDAPE`) and coverage of the `yhat_lower` and `yhat_upper` estimates. These are computed on a rolling window of the predictions in `df_cv` after sorting by horizon (`ds` minus `cutoff`). By default 10% of the predictions will be included in each window, but this can be changed with the rolling_window argument.
+
+```{r, message = FALSE, warning = FALSE}
+# Create a dataframe
+model1_performance <- performance_metrics(model1_cv)
+
+# Print
+model1_performance
+```
+
 ### Short data
 
 #### Import data
@@ -375,6 +385,16 @@ ggplot(model2_cv, aes(x = ds)) + geom_line(aes(y = y, color = "Actual"), size = 
                                  xlab("Monthy data") + 
                                  ylab("Median Sale Price") + 
                                  scale_color_manual(values = colors)
+```
+
+The `performance_metrics` utility can be used to compute some useful statistics of the prediction performance (`yhat`, `yhat_lower`, and `yhat_upper` compared to y), as a function of the distance from the cutoff (how far into the future the prediction was). The statistics computed are mean squared error (`MSE`), root mean squared error (`RMSE`), mean absolute error (`MAE`), mean absolute percent error (`MAPE`), median absolute percent error (`MDAPE`) and coverage of the `yhat_lower` and `yhat_upper` estimates. These are computed on a rolling window of the predictions in `df_cv` after sorting by horizon (`ds` minus `cutoff`). By default 10% of the predictions will be included in each window, but this can be changed with the rolling_window argument.
+
+```{r, message = FALSE, warning = FALSE}
+# Create a dataframe
+model2_performance <- performance_metrics(model2_cv)
+
+# Print
+model2_performance
 ```
 
 ### Additional information
