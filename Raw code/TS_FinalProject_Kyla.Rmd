@@ -1,0 +1,409 @@
+---
+title: 'Time Series: Final Team Project'
+author: "Kyla Ronellenfitsch"
+date: "22/11/2020"
+output: 
+  html_document:
+      toc: True
+      toc_depth: 3
+      number_sections: false
+      toc_float:
+        collapsed: false 
+        smooth_scroll: false
+params:
+  hwnumber: x
+---
+
+```{r}
+library(tidyverse) # for general analysis
+library(fpp)
+library(fpp3) # for predictions 
+library(ggthemes) # for beautiful themes
+library(TSA) # for TS analysis
+library(kableExtra) # for beautiful tables
+library(lubridate) # for time data
+library(tsibble) # for tsiblle data format
+library(caret) # for modeling
+library(stats)
+library(ggplot2)
+library(MuMIn)
+library(Metrics)
+library(tstools)
+
+
+# Set a theme
+theme_set(theme_minimal())
+```
+
+# Exploratory Data Analysis  
+  
+*Data is imported and transformed into a time series object.*
+
+```{r}
+sales_month <- read_csv("Zillow monthly raw data (full).csv") #import raw data file
+
+chicago_sales_m <- sales_month %>% filter(RegionName == "Chicago, IL") #import Chicago data only 
+
+chicago_sales_m <- chicago_sales_m %>% #select median price and data only 
+                 gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+                 select(Date, Price) %>%
+                 rename(Median_price = Price)
+
+chicago_sales_m$Date <- mdy(chicago_sales_m$Date)
+
+dim(chicago_sales_m)
+
+chi_median <- ts(chicago_sales_m$Median_price, start=c(2008,2), frequency=12)
+```
+  
+*Data is complete, and in appropriate form.*
+  
+```{r}
+sum(is.na(chi_median)) #check for null values
+frequency(chi_median) #check correct frequency of time series
+cycle(chi_median) #check appropriate structure of time series 
+```
+  
+*There are two distinctive trends - a negative trend during and in the wake of the 2008 financial crisis (2008-2013), followed by a positive trend until the present. There is also clear additive seasonality. However, this seasonal trend has been impacted by the current COVID-19 pandemic.*
+  
+```{r}
+autoplot(chi_median, main="Chicago: Median Home Sale Price")
+min(chi_median) #$149,000, which correspondts to February 2013
+max(chi_median) #$279,000 which corresponds to August 2020
+```
+  
+*Decomposition of the time series validates initial impression of the data. However there appears to be more than one seasonal trend, evidenced by the "seasonal" and "random" decompsitions.*
+
+```{r}
+plot(decompose(chi_median))
+```
+  
+*Median price peaks during the summer months. The range between median prices is also narrower in the spring/summer months than in the rest of the year.*   
+  
+```{r}
+boxplot(chi_median~cycle(chi_median), xlab="Cycle (Year)", ylab="Dollars", main="Chicago: Median Home Sales Price")
+```
+
+*Both the ACF and PACF decay sinusodially slowly over time, indicating seasonality and a significant linear relationship between the series and its lags.*
+  
+```{r}
+acf(chi_median, main="ACF Chicago Median Home Sales", lag.max=50)
+pacf(chi_median, main="PACF Chicago Median Home Sales", lag.max=50)
+```
+  
+*Looking at the Raw Periodogram, we can see that there are many spikes and therefore many dominating frequencies. The periodgram has two spikes, which will be most important to the overall signal.* 
+  
+```{r}
+spectrum(chi_median)
+periodogram(chi_median)
+```
+  
+*Create train/test split for modelling.*
+  
+```{r}
+chi_train<-window(chi_median, end = 2019.6) #end train in August 2019
+chi_test<-window(chi_median, start = 2019.6) #use last year of dataset as test
+
+#double-check time series structure
+frequency(chi_train) 
+cycle(chi_train) 
+
+frequency(chi_test)
+cycle(chi_test) 
+```
+
+# Holt-Winters Seasonal Method  
+  
+*The Holt-Winters Seasonal Method was selected based on its appropriateness for time series with both a trend and seasonality. Two additive HW models were created - one with and one without damping.*  
+  
+*The first model, which does not include damping, does not completely capture the autocorrelation in the time series. There remains significant autocorellation in the residuals, and the residuals are not normally distributed.*  
+
+```{r}
+HW1 <- hw(chi_train, seasonal = "additive",h=12, damped = FALSE) 
+plot(HW1)
+checkresiduals(HW1)
+```
+  
+*Adding damping does not improve the model. The residuals do not resemble white noise.*
+  
+```{r}
+HW2 <- hw(chi_train, seasonal = "additive",h=12, damped = TRUE) 
+plot(HW2)
+checkresiduals(HW2)
+```
+  
+# sArima  
+  
+*From the EDA, we know that there is significant seasonality in the data, suggesting that a sArima model might be appropriate. We begin exploring ways to make the data stationary.*  
+  
+*We first check if a Box-Cox Transformation is necessary, and find that lambda should be set to 1.999 (rounded to 2 for simplicity). Once the Box-Cox Transformation is completed, a KPSS Test for stationarity is completed. The series is not stationary.*  
+  
+```{r}
+BoxCox.lambda(chi_train) # lambda = 1.999924, significantly different from 1
+lambda <- 2 # round up lambda value to 2 for simplicity 
+transformed <- BoxCox(chi_train, lambda=lambda) # BoxCox Transformation
+kpss.test(transformed) # p=0.0141, data post-Box-Cox transformation is not stationary 
+```
+  
+*The time series becomes stationary after 1st order differencing.*
+  
+```{r}
+differenced <- diff(transformed) #difference transformed data
+kpss.test(differenced) # KPSS test - p=0.1 > 0.05, data is stationary after Box-Cox transformation and 1 round of differencing 
+tsdisplay(differenced, lag=50) #visualize new dataset 
+periodogram(differenced) #uncertain of if we only look at the periodgram for raw data
+```
+  
+*A sArima model is built using auto.arima, with differencing=1 and lambda=2. This results in an ARIMA(2,1,2)(0,1,1)[12] model. The Ljung-Box test shows that there is not significant autocorrelation remaining in the residuals - they resemble white noise.*  
+  
+```{r}
+AR1 <-  auto.arima(chi_train, d=1, lambda=lambda)
+summary(AR1)
+checkresiduals(AR1)
+plot(forecast(AR1))
+```
+  
+*Further exploration is necessary to see if a superior sArima model can be built.*
+
+```{r}
+eacf(chi_train)
+```
+  
+*We experiment with different combinations of p=1/2, q=1/2, and P=0/1. Of the models tested, only AR2 (Arima(2,1,2)(1,1,1)[12]) passes the Ljung-Box test (assuming 0.05 threshold).*
+  
+```{r}
+AR2 <-  Arima(chi_train, order=c(2,1,2), seasonal=c(1,1,1),lambda=lambda) #p=0.09
+summary(AR2)
+checkresiduals(AR2)
+
+AR3 <-  Arima(chi_train, order=c(1,1,1), seasonal=c(1,1,1),lambda=lambda) #p=0.005
+summary(AR3)
+checkresiduals(AR3)
+
+AR4 <-  Arima(chi_train, order=c(1,1,2), seasonal=c(0,1,1),lambda=lambda) #p=0.01
+summary(AR4)
+checkresiduals(AR4)
+
+AR5 <-  Arima(chi_train, order=c(2,1,1), seasonal=c(0,1,1),lambda=lambda) #p=0.002
+summary(AR5)
+checkresiduals(AR5)
+```
+  
+*Next, we compare the AICc and BIC scores to the two models that passed the Ljung-Box Test. The model selected by the auto.arima superior has lower AICc and BIC values, showing that it is the better choice.*
+  
+```{r}
+
+AR_AB <- c(AR1$aicc, AR2$aicc, AR1$bic, AR2$bi)
+names=c("AR1: AICc","AR2: AICc","AR1: BIC","AR2: BIC")
+
+barplot(AR_AB, names=names, ylim=c(5585,5615), main="Arima Models", col='azure')
+```
+
+*Next, we use the ARIMA(2,1,2)(0,1,1)[12] model to forecast results for the next year. The "Actual vs. Predicted" chart shows that the model does a decent job of forecasting values pre-COVID, but is not capable of accurately predicted the trend for the past few months.*
+
+```{r}
+#model 1
+AR1_fcast <- forecast(AR1, h=12)
+plot(AR1_fcast, chi_test)
+
+tsplot(cbind(chi_test, AR1_fcast$mean), plot_title="Actual vs. Predicted")
+
+MAE(AR1_fcast$mean, chi_test)
+RMSE(AR1_fcast$mean, chi_test)
+```
+
+*Next we do cross-validation to understand how the model's performance evolves over time.*
+
+```{r}
+
+k <- 72 # minimum observations (6 years)
+n <- length(chi_median) # Number of data points
+p <- 12 # Period
+H <- 12 # Forecast horizon
+
+defaultW <- getOption("warn") 
+options(warn = -1)
+
+st <- tsp(chi_median)[1]+(k-2)/p #  gives the start time in time units,
+
+error_AR1 <- matrix(NA,n-k,H) # One-year forecast horizon error for each window
+
+AICc_AR1 <- matrix(NA,n-k) # Estimated model AICc value for each wndow
+
+for(i in 1:(n-k))
+
+{
+  
+  # rolling window
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p) ## Window Length: k
+  
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+H)/p) ## Window Length: H
+  
+  #Arima Models
+  
+  AR12 <-  Arima(train, order=c(2,1,2), seasonal=list(order=c(0,1,1), period=p), lambda='auto', method='ML') #ARIMA(2,1,2)(0,1,1)[12]
+
+  fcast_AR1 <- forecast(AR12, h=H)
+
+  # Error & AICc
+
+  error_AR1[i,1:length(test)] <- fcast_AR1[['mean']]-test
+
+  AICc_AR1[i] <- AR12$aicc
+}
+```
+
+
+```{r}
+MAE_AR1 <- colMeans(abs(error_AR1), na.rm=TRUE)
+RMSE_AR1 <- sqrt(colMeans(error_AR1**2, na.rm=TRUE))
+
+plot(1:12, MAE_AR1, type="l",col=3,xlab="Horizon", ylab="Error", ylim=c(3600,8000))
+lines(1:12, RMSE_AR1, type="l",col=2)
+legend("topleft",legend=c("AR1 - MAE", "AR - RMSE"),col=1:4,lty=1)
+
+plot(1:79, AICc_AR1, type="l",col=1,xlab="Iterations", ylab="AICc", ylim=c(750,2650))
+legend("bottomright",legend="AR1 - AICc",col=1:4,lty=1)
+```
+
+# Regression with Arima errors 
+
+*As previously mentioned, the sArima model was not able to capture the changed environment due to COVID. Therefore, we will try Regression with Arima errors, in order to include other leading predictors.*  
+  
+*We tried Google Trends data for two search terms: "homes for sale" and "realtor".*  
+  
+*First, we import the datasets and double-check dimensions.*  
+  
+```{r}
+homes <- read_csv("home for sale.csv") #Google Trends "home for sale" Data 
+realtor <- read_csv("realtor.csv") #Google Trends "realtor" Data 
+
+homes$Month <- yearmonth(homes$Month) 
+realtor$Month <- yearmonth(realtor$Month) 
+
+dim(homes)
+dim(realtor)
+
+sum(is.na(homes))
+sum(is.na(realtor))
+
+```
+
+*Store as TS object*
+
+```{r}
+homes_ts <- ts(homes$`Home for sale`, frequency=12, start=c(2008,2))
+realtor_ts <- ts(realtor$Realtor, frequency=12, start=c(2008,2))
+```
+
+*Visualize the median sale price (scaled) dataset and the two Google Trends datasets. They show similar seasonality, suggesting that they might be appropriate predictors.*
+
+```{r}
+chi_median_scale <- chi_median/1000
+tsplot(cbind(chi_median_scale, homes_ts, realtor_ts), plot_title="Trends")
+```
+  
+*Train/test split*  
+  
+```{r}
+home_train<-window(homes_ts, end = 2019.6) #end train in August 2019
+home_test<-window(homes_ts, start = 2019.6) #use last year of dataset as test
+
+realtor_train<-window(realtor_ts, end = 2019.6) #end train in August 2019
+realtor_test<-window(realtor_ts, start = 2019.6) #use last year of dataset as test
+```
+  
+*Transform realtor data with a lambda value of 0.3 prior to fitting the regression model.*  
+  
+```{r}
+lambda_realtor <- BoxCox.lambda(realtor_train) # lambda = 0.3, significantly different from 1
+transformed_realtor <- BoxCox(realtor_train, lambda=lambda_realtor) # BoxCox Transformation
+```
+  
+*The regression model using the transformed_realtor dataset does not pass the Ljung-Box test for stationarity.*  
+  
+```{r}
+RAR1 <- auto.arima(y=chi_train, lambda=lambda, xreg=transformed_realtor) #auto.arima model 
+summary(RAR1) # b) summary 
+checkresiduals(RAR1) # c) check residuals 
+```
+
+*The "home for sale" dataset did not need to be transformed.*  
+  
+```{r}
+BoxCox.lambda(home_train) # lambda = 0.9, similar to 1 so won't transform
+```
+  
+*Similar to the other regression  model, there remains significant autocrrelation in the residuals for this model as well.*
+  
+```{r}
+RAR2 <- auto.arima(y=chi_train, lambda=lambda, xreg=home_train) #auto.arima model 
+summary(RAR2) # b) summary 
+checkresiduals(RAR2) # c) check residuals 
+```
+
+*Save as TS object, do train/test split*
+
+```{r}
+gtrends <- cbind(homes, realtor$Realtor)
+gtrends_ts <- ts(gtrends, frequency=12, start=c(2008,2))
+gtrends_ts <- cbind(gtrends_ts[,'Home for sale'], gtrends_ts[,'realtor$Realtor'])
+
+gtrends_train<-window(gtrends_ts, end = 2019.6) #end train in August 2019
+gtrends_test<-window(gtrends_ts, start = 2019.6) #use last year of dataset as test
+```
+  
+*As with other regression models, there remains significant autocorrelation in the residuals. Will experiment with other predictors later time permitting.*
+  
+```{r}
+RAR3 <- auto.arima(y=chi_train, lambda=lambda, xreg=gtrends_train) #auto.arima model 
+summary(RAR3) # b) summary 
+checkresiduals(RAR3) # c) check residuals 
+```
+
+# Dynamic Harmonic Regression  
+
+*Recall Periodgram points to two major spikes.*
+
+```{r}
+temp <- periodogram(chi_train)
+spec_p <- matrix(round(temp$spec/1e5, 2))
+freq_p <- matrix(temp$freq)
+cbind(spec_p, freq_p) # two major spikes at 0.00625 and 0.08125
+(1/0.00625)/12 # once every 13 years?? 
+(1/0.08125)/12 # once every year?? 
+```
+
+*We create a regression model using a Fourier transformation (K=2) as the predictor, and Arima errors. This results in an ARIMA(0,2,3)(1,0,0)[12] model. The residuals are stationary and relatively normally distributed, signaling that they are white noise.*
+
+```{r}
+DHR1 <-  auto.arima(chi_train, xreg=fourier(chi_train, K=2)) # in example seasonal=FALSE, not sure if that should be the setting here? 
+summary(DHR1)
+checkresiduals(DHR1)
+```
+
+*This model is less accurate than the sArima model used for prediction earlier, although both models struggle with the same thing: predicting values during the COVID period.*
+
+```{r}
+#model 2
+
+DHR1_fcast <- forecast(DHR1, h=12, xreg=fourier(chi_train, K=2, h=12))
+plot(DHR1_fcast, chi_test)
+
+tsplot(cbind(chi_test, DHR1_fcast$mean), plot_title="Actual vs. Predicted")
+
+MAE(DHR1_fcast$mean, chi_test)
+RMSE(DHR1_fcast$mean, chi_test)
+
+```
+
+# Intervention 
+
+*Will come back to this*
+
+```{r}
+#arimax(y,order=c(1,0,1), xreg=data.frame(x=c(rep(0,200),1:200)))
+#xreg=data.frame(x=c(rep(0,200),1:200)))
+```
+
+
