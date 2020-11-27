@@ -2,11 +2,11 @@
 
 Time period of the analysis:
 
-* Full Train from 2008 (whole)
+* Train - before up to 2017
 
-* Partial Train from 2013*2014 (partial) – clarify additionally
+* CV 2018
 
-* Test 9/30/19*8/31/20
+* Test: Feb 2019 - Jan 2020
 
 Data:
 
