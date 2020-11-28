@@ -1,0 +1,366 @@
+---
+title: "sARIMA_MT"
+author: "Mike Thompson"
+date: "November 27, 2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=F, warning=F, libraries}
+library(fpp)
+library(zoo)
+library(tidyverse)
+library(xts)
+library(TSA)
+library(lubridate)
+```
+
+## Data
+### Load Data
+```{r message=F, warning=F, load_data}
+sales_month <- read_csv("Zillow monthly raw data (full).csv") #import raw data file
+
+chicago_sales_m <- sales_month %>% filter(RegionName == "Chicago, IL") #import Chicago data only 
+
+chicago_sales_m <- chicago_sales_m %>% #select median price and data only 
+  gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
+  select(Date, Price) %>%
+  rename(Median_price = Price)
+
+chicago_sales_m$Date <- mdy(chicago_sales_m$Date)
+
+
+chi_median <- ts(chicago_sales_m$Median_price, start=c(2008,2), frequency=12)
+
+chi_train<-window(chi_median, start= 2008+11/12, end = 2014+11/12)
+chi_test<-window(chi_median, start= 2015, end = 2016)
+```
+
+### EDA
+EDA on training set through 12/31/2014. Find power transformation and differencing needed to get a stationary, homoscedastic time series.
+
+```{r message=F, warning=F, EDA}
+#check stationarity
+tsdisplay(chi_train)
+```
+
+The data looks neither stationary nor does it look to have uniform variance. Try applying BoxCox transformation to get homoscedastic data and differencing to get stationarity.
+
+```{r}
+BoxCox.lambda(chi_train)
+
+tsdisplay(diff(BoxCox(chi_train,lambda=2),1))
+
+adf.test(diff(BoxCox(chi_train, lambda=2),1)[-1])
+kpss.test(diff(BoxCox(chi_train, lambda=2),1)[-1])
+```
+
+P-value of 0.01 for ADF test results in rejecting the null hypothesis test and accepting the alternative hypothesis that the data is stationary. A p-value of 0.1 for the KPSS test indicates that we do not reject the null hypothesis (at 0.05 significance level) that the data is stationary. Therefore, both tests indicate that the transformed data is stationary. The variance appears to have more uniformity after applying the BoxCox transformation.
+
+
+## sARIMA
+### Search EACF
+Check models based on EACF up to time period 3 (since it is reasonable to suspect quarterly seasonality) and limit annual seasonaliity to period 1 since we do not expect multi-year relationships. Predict next 12 months from 1/31/2015 to 12/31/2015 and check results.
+
+```{r sARIMA}
+aic <- c()
+residuals <- c()
+preds <- c()
+actuals <-c()
+
+a <- eacf(diff(BoxCox(chi_train, lambda=2), 1)[-1])
+
+
+params <- c()
+ct <- 1
+aic <- c()
+p <- c()
+q <- c()
+P <- c()
+Q <- c()
+D <- c()
+RMSE <- c()
+MAE <- c()
+
+for (y in c(0:1)) {
+for (x in c(0:1)) {
+for (j in c(0:3)) {
+for (i in c(0:3)) {
+  if ((j<=1)|(j==3 & i==0)) {}  else{
+    
+    model <-Arima(chi_train, order=c(i,1,j), lambda='auto', seasonal=list(order=c(x,1,y), period=12))
+    aic[ct] <- model$aicc
+    f <- forecast(model, h=12)  
+    residuals <- chi_test - f$mean
+    RMSE[ct] <- mean(residuals**2)**0.5    
+    MAE[ct] <- mean(abs(residuals))  
+    p[ct] <- i
+    q[ct] <- j
+    P[ct] <- x
+    Q[ct] <- y
+    ct <- ct+1
+  }
+}}}}
+
+res <- data.frame(aic,p,q,P,Q, RMSE, MAE)
+res <- res[order(res$RMSE),]
+res$RMSE_rank <- order(res$RMSE)
+res <- res[order(res$aic),]
+res$aic_rank <- order(res$aic)
+print(res[(res$RMSE_rank<=10)&(res$aic_rank<=10),])
+```
+
+### View Model Candidates
+Find best performance on cross validation set from 1/31/2016 to 12/31/2018 for models that don't have significant autocorrelation amongst residuals and that are in the top 10 in RMSE during 2015 and top 10 in AICc values.
+
+```{r view_candidates}
+m1 <- Arima(chi_train, order=c(0,1,2), 
+      seasonal=list(order=c(0,1,1), period=12), 
+      lambda='auto', method='ML')
+
+checkresiduals(m1)
+
+m2 <- Arima(chi_train, order=c(1,1,2), 
+      seasonal=list(order=c(0,1,1), period=12), 
+      lambda='auto', method='ML')
+
+checkresiduals(m2)
+
+m3 <- Arima(chi_train, order=c(2,1,2), 
+      seasonal=list(order=c(0,1,1), period=12), 
+      lambda='auto', method='ML')
+
+checkresiduals(m3)
+
+m4 <- Arima(chi_train, order=c(1,1,3), 
+      seasonal=list(order=c(0,1,1), period=12), 
+      lambda='auto', method='ML')
+
+checkresiduals(m4)
+
+m5 <- Arima(chi_train, order=c(3,1,2), 
+      seasonal=list(order=c(0,1,1), period=12), 
+      lambda='auto', method='ML')
+
+checkresiduals(m5)
+```
+
+All of the models fail to reject the null hypothesis of the Ljung-Box test, indicating the residuals do not exhibit significant autocorrelation. Therefore, test all identified models on cross validation data.
+
+## Cross Validation Results
+```{r}
+k <- 72 # minimum observations (6 years)
+p <- 12 # Period
+
+st <- 2014+11/12
+```
+
+### ARIMA(0,1,2)(0,1,1)[12]
+```{r}
+error <- matrix(NA,37, 12)
+dates <- c()
+
+for(i in (1:37))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model <-  Arima(train, order=c(0,1,2), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+### ARIMA(1,1,2)(0,1,1)[12]
+```{r}
+error <- matrix(NA,37, 12)
+dates <- c()
+
+for(i in (1:37))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model <-  Arima(train, order=c(1,1,2), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+### ARIMA(2,1,2)(0,1,1)[12]
+```{r}
+error <- matrix(NA,37, 12)
+dates <- c()
+
+for(i in (1:37))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model <-  Arima(train, order=c(2,1,2), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+### ARIMA(1,1,3)(0,1,1)[12]
+```{r}
+error <- matrix(NA,37, 12)
+dates <- c()
+
+for(i in (1:37))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model <-  Arima(train, order=c(1,1,3), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error", 
+     main = 'Cross Validation Results: 1/31/2016 to 12/31/2018' ) 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+
+### ARIMA(3,1,2)(0,1,1)[12]
+```{r}
+error <- matrix(NA,36, 12) 
+dates <- c()
+
+for(i in (1:36))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model <-  Arima(train, order=c(3,1,2), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error", main='Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+The ARIMA(3,1,2)(0,1,1)[12] model performed the best on both a MAE and RMSE basis. We select this model as our best sARIMA model and will view results on during the test period, 1/31/2019 to 12/31/2019 (we exclude 2020 to remove the impact of Covid).
+
+## Test Set Results
+### ARIMA(3,1,2)(0,1,1)[12]
+```{r}
+error <- matrix(NA,12, 12)
+dates <- c()
+
+for(i in (37:48))
+  
+{
+  train <- window(chi_median, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(chi_median, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i-36] <- st+(i+12)/p
+  model <-  Arima(train, order=c(3,1,2), 
+                  seasonal=list(order=c(0,1,1), period=p), 
+                  lambda='auto', method='ML')
+  
+  f <- forecast(model, h=12)
+  error[i-36,1:length(test)] <- f[['mean']]-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+
+print(MAE)
+print(RMSE)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+
+plot(f)
+points(test)
+```
+
+
+The model continues to perform well on the test set, both RMSE and MAE are very reasonable relative to the values of median home prices in Chicago. This is a strong candidate for best our model.
+
