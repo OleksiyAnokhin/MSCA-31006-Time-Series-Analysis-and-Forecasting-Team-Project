@@ -1,0 +1,164 @@
+---
+title: "Project_Chicago_ets"
+author: "Chris Reimann"
+date: "11/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd('/Users/chrisreimann/Desktop/U_Chicago/MSCA_31006_Time_Series/Project')
+```
+
+```{r}
+library(expsmooth)
+library(knitr)
+library(tidyverse)
+library(tseries)
+library(TSA)
+library(xts)
+library(lubridate)
+library(timetk)
+```
+
+```{r}
+sales <- read_csv("MonthlySales.csv")
+Chicago_sales <- sales[3,6:length(sales)]
+Chicago_sales <- Chicago_sales %>% gather(key = "Date", value = "Price")
+Chicago_sales$Date<-as.POSIXct(Chicago_sales$Date, format="%m/%d/%y")
+Chicago_TS<-ts(Chicago_sales$Price, start = c(2008,2), frequency = 12)
+Chicago_TS
+autoplot(Chicago_TS)
+```
+
+
+```{r}
+Chicago_train<-window(Chicago_TS, end = c(2018,12))
+Chicago_test<-window(Chicago_TS,start = c(2019,1), end = c(2019,12))
+```
+
+```{r}
+BoxCox.lambda(Chicago_train)
+```
+
+# Transform Data
+```{r}
+Chicago_train_T<-Chicago_train^2
+Chicago_test_T<-Chicago_test^2
+```
+
+
+
+```{r}
+md_ets<-ets(Chicago_train_T, model="ZZZ", lambda=2)
+md_ets
+checkresiduals(md_ets)
+```
+
+
+
+
+#ETS model without COVID Data
+```{r}
+#Window
+train_end<-c(2014,12)
+test_start<-c(2015,1)
+test_end<-c(2015,12)
+
+Chicago_train2<-window(Chicago_TS, end = train_end)
+Chicago_test2<-window(Chicago_TS,start = test_start,end = test_end)
+```
+
+
+```{r, error=TRUE}
+defaultW <- getOption("warn") 
+options(warn = -1)
+
+
+k <- 72 # minimum observations (6 years)
+p <- 12 # Period
+st <- 2014+11/12
+
+error_sliding <- matrix(NA,36, 12)
+error_expanding <- matrix(NA,36, 12)
+AICc_1 <- matrix(NA,36,1)
+AICc_2 <- matrix(NA,36,1)
+dates <- c()
+for(i in (1:36))
+{
+  train <- window(Chicago_TS, start=st+(i-k+1)/p, end=st+i/p) #Rolling window
+  train2 <- window(Chicago_TS, start=c(2008,2), end=st+i/p) #Expanding window
+  test <- window(Chicago_TS, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  model1<-ets(train, model="AAA", lambda=2)
+  model2<-ets(train2, model="AAA", lambda=2)
+  
+  f1 <- forecast(model1, h=12)
+  f2 <- forecast(model2, h=12)
+  error_sliding[i,1:length(test)] <- f1[['mean']]-test
+  error_expanding[i,1:length(test)] <- f2[['mean']]-test
+  #AICc_1[i] <- f1$aicc
+  #AICc_2[i] <- f2$aicc
+}
+
+  
+MAE_sliding <- colMeans(abs(error_sliding), na.rm=TRUE)
+RMSE_sliding <- sqrt(colMeans(error_sliding**2, na.rm=TRUE))
+MAE_expanding <- colMeans(abs(error_expanding), na.rm=TRUE)
+RMSE_expanding <- sqrt(colMeans(error_expanding**2, na.rm=TRUE))
+
+
+plot(1:12, RMSE_sliding, type="l",col=3,xlab="Horizon", ylab="Error", 
+     main = 'Cross Validation Results: 1/31/2016 to 12/31/2018' ) 
+lines(1:12, RMSE_expanding, type="l",col=2)
+legend("topright",legend=c("RMSE_sliding", "RMSE_expanding"),col=1:4,lty=1)
+
+plot(1:12, MAE_sliding, type="l",col=3,xlab="Horizon", ylab="Error", 
+     main = 'Cross Validation Results: 1/31/2016 to 12/31/2018' ) 
+lines(1:12, MAE_expanding, type="l",col=2)
+legend("topright",legend=c("MAE_sliding", "MAE_expanding"),col=1:4,lty=1)
+
+print(MAE_sliding)
+print(RMSE_sliding)
+print(MAE_expanding)
+print(RMSE_expanding)
+
+print(sum(MAE_sliding)/length(MAE_sliding))
+print(sum(RMSE_sliding)/length(RMSE_sliding))
+print(sum(MAE_expanding)/length(MAE_sliding))
+print(sum(RMSE_expanding)/length(MAE_sliding))
+
+```
+# Best model is sliding window AAA, lambda=2
+
+```{r}
+error <- matrix(NA,12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Chicago_TS, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(Chicago_TS, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i-36] <- st+(i+12)/p
+  model <-ets(train, model="AAA", lambda=2)
+  
+  f <- forecast(model, h=12)
+  error[i-36,1:length(test)] <- f[['mean']]-test
+}
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+print(MAE)
+print(RMSE)
+print(sum(MAE)/length(MAE))
+print(sum(RMSE)/length(RMSE))
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+plot(f)
+points(test)
+```
