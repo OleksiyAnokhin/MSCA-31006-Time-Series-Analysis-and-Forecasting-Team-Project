@@ -1,0 +1,246 @@
+---
+title: "Project VAR"
+author: "Chris Reimann"
+date: "11/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd('/Users/chrisreimann/Desktop/U_Chicago/MSCA_31006_Time_Series/Project')
+```
+
+```{r}
+library(expsmooth)
+library(knitr)
+library(tidyverse)
+library(tseries)
+library(TSA)
+library(xts)
+library(lubridate)
+library(timetk)
+```
+
+
+```{r}
+sales <- read_csv("MonthlySales.csv")
+Chicago_sales <- sales[3,6:length(sales)]
+Chicago_sales <- Chicago_sales %>% gather(key = "Date", value = "Price")
+Chicago_sales$Date<-as.POSIXct(Chicago_sales$Date, format="%m/%d/%y")
+Chicago_TS<-ts(Chicago_sales$Price, start = c(2008,2), frequency = 12)
+Chicago_TS
+autoplot(Chicago_TS)
+```
+
+```{r}
+Chicago_train<-window(Chicago_TS, end = c(2018,12))
+Chicago_test<-window(Chicago_TS,start = c(2019,1), end = c(2019,12))
+```
+
+
+#Load potential variables
+```{r}
+CPI <- read_csv("CPImonthly.csv")
+CPI$Date<-as.POSIXct(CPI$Date, format="%m/%d/%y")
+
+mortrate <- read_csv("mortgagerate.csv")
+mortrate$Date<-as.POSIXct(CPI$Date, format="%m/%d/%y")
+
+UnempR <- read_csv("UnemploymentRate.csv")
+UnempR<-UnempR[1:151,]
+UnempR$Date<-as.POSIXct(UnempR$Date, format="%m/%d/%y")
+
+DJI <- read_csv("DJI.csv")
+DJI$Date<-as.POSIXct(DJI$Date, format="%m/%d/%y")
+
+econ <- read_csv("Chicago_econ.csv")
+econ$Date<-as.POSIXct(econ$Date, format="%m/%d/%y")
+
+CS_Index <- read_csv("CHXRNSA.csv")
+CS_Index$Date<-as.POSIXct(CS_Index$DATE, format="%m/%d/%y")
+```
+
+```{r}
+#Window
+train_end<-c(2018,12)
+test_start<-c(2019,1)
+test_end<-c(2019,12)
+
+Chicago_train<-window(Chicago_TS, end = train_end)
+Chicago_test<-window(Chicago_TS,start = test_start,end = test_end)
+
+CPI_ts<-ts(CPI$CPI, start = c(2008,2), frequency = 12)
+CPI_train<-window(CPI_ts, end = train_end)
+CPI_test<-window(CPI_ts,start = test_start,end = test_end)
+
+mortgage_ts<-ts(mortrate$Rate, start = c(2008,2), frequency = 12)
+mortgage_train<-window(mortgage_ts, end = train_end)
+mortgage_test<-window(mortgage_ts,start = test_start,end = test_end)
+
+Unemp_ts<-ts(UnempR$UnempRate, start = c(2008,2), frequency = 12)
+Unemp_train<-window(Unemp_ts, end = train_end)
+Unemp_test<-window(Unemp_ts,start = test_start,end = test_end)
+
+DJI_ts<-ts(DJI$Close, start = c(2008,2), frequency = 12)
+DJI_train<-window(DJI_ts, end = train_end)
+DJI_test<-window(DJI_ts,start = test_start,end = test_end)
+
+emp_ts<-ts(econ$employment, start = c(2008,2), frequency = 12)
+emp_train<-window(emp_ts, end = train_end)
+emp_test<-window(emp_ts,start = test_start,end = test_end)
+
+CSI_ts<-ts(CS_Index$Index, start = c(2008,2), frequency = 12)
+CSI_train<-window(CSI_ts, end = train_end)
+CSI_test<-window(CSI_ts,start = test_start,end = test_end)
+
+
+cor(CPI_train,Chicago_train)
+cor(mortgage_train,Chicago_train)
+cor(Unemp_train,Chicago_train)
+cor(emp_train,Chicago_train)
+cor(DJI_train,Chicago_train)
+cor(CSI_train,Chicago_train)
+```
+
+#Select top 3 correlated variables: CSI Index, Employment, and mortgage rate.
+```{r}
+library(vars)
+VARselect(cbind(Chicago_train,CSI_train,emp_train,mortgage_train), lag.max = 20, type = c("const", "trend", "both", "none"),
+season = 12, exogen = NULL)$selection
+```
+
+```{r}
+var1<-VAR(cbind(Chicago_train,CSI_train,emp_train,mortgage_train),p=7,type = "both", season = 12)#We will not use mortgage rate as it is the least coorelated. Effort to keep Ks to a minimum, 
+serial.test(var1, lags.pt = 20, type = "PT.asymptotic") 
+```
+### Best p-value is 7, but we reject null hypothesis. Which means there is still some serial correlation.
+
+#Select top 3 correlated variables
+```{r}
+VARselect(cbind(Chicago_train,CSI_train,emp_train), lag.max = 20, type = c("const", "trend", "both", "none"),
+season = 12, exogen = NULL)$selection
+```
+
+```{r}
+var2<-VAR(cbind(Chicago_train,CSI_train,emp_train),p=7,type = "both", season = 12)#We will not use mortgage rate as it is the least coorelated. Effort to keep Ks to a minimum, 
+serial.test(var2, lags.pt = 20, type = "PT.asymptotic") 
+```
+### We are able to accept the null hypothesis, no serial correlation.
+
+
+#Select top 3 correlated variables
+```{r}
+library(vars)
+VARselect(cbind(Chicago_train,CSI_train,mortgage_train), lag.max = 20, type = c("const", "trend", "both", "none"),
+season = 12, exogen = NULL)$selection
+```
+
+```{r}
+var3<-VAR(cbind(Chicago_train,CSI_train,mortgage_train),p=5,type = "both", season = 12)#We will not use mortgage rate as it is the least coorelated. Effort to keep Ks to a minimum, 
+serial.test(var3, lags.pt = 20, type = "PT.asymptotic") 
+```
+### Best p-value is 7, but we reject null hypothesis. Which means there is still some serial correlation.
+
+
+```{r}
+acf(residuals(var1)[,1])
+acf(residuals(var2)[,1])
+acf(residuals(var3)[,1])
+```
+### Our second model has the best looking ACF graph.
+```{r}
+summary(var2)
+```
+## NEED TO ADD ANALYSIS OF MODEL
+
+```{r}
+var_frcst1<-ts(predict(var1, n.ahead = 12, ci = .95)$fcst$Chicago_train[,1],start = test_start, frequency = 12)
+var_frcst2<-ts(predict(var2, n.ahead = 12, ci = .95)$fcst$Chicago_train[,1],start = test_start, frequency = 12)
+var_frcst3<-ts(predict(var3, n.ahead = 12, ci = .95)$fcst$Chicago_train[,1],start = test_start, frequency = 12)
+
+accuracy(var_frcst1,Chicago_test)
+accuracy(var_frcst2,Chicago_test)
+accuracy(var_frcst3,Chicago_test)
+```
+
+### Our second model performs best and does not show serial autocorrelation and has a great acf plot. We will perform CV on this model.
+
+#CV
+```{r}
+k <- 72 # minimum observations (6 years)
+p <- 12 # Period
+st <- 2014+11/12
+```
+
+
+```{r}
+error <- matrix(NA,36, 12)
+dates <- c()
+for(i in (1:36))
+  
+{
+  train <- window(Chicago_TS, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(Chicago_TS, start=st + (i+1)/p, end=st+(i+12)/p)
+  CSI_train <- window(CSI_ts, start=st+(i-k+1)/p, end=st+i/p)
+  CSI_test <- window(CSI_ts, start=st + (i+1)/p, end=st+(i+12)/p)
+  emp_train <- window(emp_ts, start=st+(i-k+1)/p, end=st+i/p)
+  emp_test <- window(emp_ts, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i] <- st+(i+12)/p
+  var_model <-  VAR(cbind(train,CSI_train,emp_train),p=7,type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[,1],start =st + (i+1)/p, frequency = 12)
+  error[i,1:length(test)] <- f-test
+}
+
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+```
+
+### Interestingly, we are able to predict better at 12 months than 6 months. 
+
+
+## Test Set Results
+```{r}
+error <- matrix(NA,12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Chicago_TS, start=st+(i-k+1)/p, end=st+i/p)
+  test <- window(Chicago_TS, start=st + (i+1)/p, end=st+(i+12)/p)
+  CSI_train <- window(CSI_ts, start=st+(i-k+1)/p, end=st+i/p)
+  CSI_test <- window(CSI_ts, start=st + (i+1)/p, end=st+(i+12)/p)
+  emp_train <- window(emp_ts, start=st+(i-k+1)/p, end=st+i/p)
+  emp_test <- window(emp_ts, start=st + (i+1)/p, end=st+(i+12)/p)
+  dates[i-36] <- st+(i+12)/p
+  final_md<-VAR(cbind(train,CSI_train,emp_train),p=5,type = "both", season = 12)
+  
+  f <- ts(predict(final_md, n.ahead = 12, ci = .95)$fcst$train[,1],start =st + (i+1)/p, frequency = 12)
+  error[i-36,1:length(test)] <- f-test
+}
+MAE <- colMeans(abs(error), na.rm=TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm=TRUE))
+plot(1:12, RMSE, type="l",col=3,xlab="Horizon", ylab="Error",
+     main='Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type="l",col=2)
+legend("topright",legend=c("RMSE", "MAE"),col=1:4,lty=1)
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+plot(dates, error[,12], ylab='Residual', main='Residuals from 12 Month Horizon')
+plot(f)
+points(test)
+```
