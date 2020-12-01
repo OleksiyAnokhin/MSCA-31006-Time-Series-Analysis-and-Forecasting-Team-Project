@@ -1,5 +1,5 @@
 ---
-title: "TS Zillow Team Project (VAR model)"
+title: "TS Zillow Team Project (VAR CV model)"
 author: "Oleksiy Anokhin"
 date: "10/29/2020"
 output:
@@ -38,6 +38,9 @@ library(lubridate)
 library(zoo)
 library(vars)
 library(stats)
+# library(forecast)
+library(urca)
+library(stats)
 
 # Set a theme
 theme_set(theme_minimal())
@@ -46,664 +49,966 @@ theme_set(theme_minimal())
 options(scipen = 999)
 ``` 
 
-### Zillow data
-
 #### Import data
+
+This dataset was aggregated from two different datasets - Median Sale Price in Chicago (Zillow) and Average Mortgage Rate in Chicago area (Federal data).
 
 ```{r, message = FALSE, warning = FALSE}
 # Read data
-chicago <- read_csv("Zillow monthly raw data (full).csv")
-
-# Check dimensions
-dim(chicago)
-```
-
-#### Data manipulation
-
-```{r, message = FALSE, warning = FALSE}
-# Pick Chicago only
-chicago <- chicago %>% filter(RegionName == "Chicago, IL")
-
-# Check dimensions
-dim(chicago)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Convert data from wide to long format for proper analysis
-chicago <- chicago %>% gather(key = "Date", value = "Price", -RegionID:-StateName) %>%
-                       dplyr::select(RegionName, Date, Price) %>%
-                       rename(Metro_area = RegionName, Median_price = Price)
-                              
-# Check dimensions
-dim(chicago)
+chicago_data <- read_csv("VAR data.csv")
 
 # Print
-kable(head(chicago, n = 5)) %>% kable_styling() 
+head(chicago_data)
 ```
+#### EDA
 
 ```{r, message = FALSE, warning = FALSE}
-# Save long data
-# write.csv(chicago,"Chicago long.csv")
-```
+# Split data into train and test
+Median_price_ts <- ts(chicago_data$Median_price, start = c(2008, 2), frequency = 12)
 
-The `ds` column should be `YYYY-MM-DD` for a date, or `YYYY-MM-DD HH:MM:SS` for a `timestamp`. 
+# Print 
+Median_price_ts
 
-```{r, message = FALSE, warning = FALSE}
-# Convert date from character to date
-chicago$Date <- mdy(chicago$Date)
-
-# Print
-kable(head(chicago, n = 5)) %>% kable_styling() 
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Drop Metro area column
-chicago <- chicago %>% dplyr::select(Date, Median_price) 
-
-# Print
-kable(head(chicago, n = 5)) %>% kable_styling() 
-```
-
-#### Plot data
-
-```{r, message = FALSE, warning = FALSE}
-# Convert to tsibble
-chicago <- as_tsibble(chicago)
-
-# Plot data
-chicago %>% autoplot(Median_price, color = "#1277e1", size = 1) +
-                     labs(title = "Median Sale Price in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
-                     xlab("Monthly data by year") + ylab("Median Sale Price")
-```
-
-### Mortgage data
-
-#### Import data
-
-Here we need to import data, which is report by the start of each month.
-
-Our average mortgage interest rate in the US ire reported on weekly basis, so we need to do additional manipulations. 
-
-```{r, message = FALSE, warning = FALSE}
-# Read data
-mortgage_data <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
-
-# Print
-kable(head(mortgage_data, n = 5)) %>% kable_styling() 
-```
-
-#### Data manipulation
-
-```{r, message = FALSE, warning = FALSE}
-# Rename columns
-mortgage_data <- mortgage_data %>% rename(Date = DATE, Rate = MORTGAGE30US)
-
-# Print
-kable(head(mortgage_data, n = 5)) %>% kable_styling() 
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Convert date from character to date
-mortgage_data$Date <- mdy(mortgage_data$Date)
-
-# Check class 
-class(mortgage_data)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Convert dataframe to tsibble
-mortgage_data <- as_tsibble(mortgage_data)
-```
-
-#### Plot data
-
-```{r, message = FALSE, warning = FALSE}
-# Plot the initial data
-mortgage_data %>% autoplot(Rate, color = "#1277e1", size = 1) +
-                  labs(title = "30-Year Fixed US Mortgage Average Rate", subtitle = "February 2008 - August 2020") +
-                  xlab("Weekly data") + ylab("Mortgage rate")
-```
-
-#### Group by month
-
-```{r, message = FALSE, warning = FALSE}
-# Read the data again
-mortgage_data_monthly <- read_csv("30-Year Fixed Rate Mortgage Average (Fed).csv")
-
-# Convert data to months
-mortgage_data_monthly <- mortgage_data_monthly %>% group_by(Month = as.Date(as.yearmon(mdy(DATE)), 1)) %>% 
-                                                   summarise(Average_rate = mean(MORTGAGE30US))
-
-# Round data
-mortgage_data_monthly$Average_rate <- round(mortgage_data_monthly$Average_rate, digits = 2)
-                                                  
-# Print
-kable(head(mortgage_data_monthly, n = 5)) %>% kable_styling()
-```
-
-#### Plot data
-
-```{r, message = FALSE, warning = FALSE}
-# Convert dataframe to tsibble
-mortgage_data_monthly <- as_tsibble(mortgage_data_monthly)
-
-# # Plot the initial data
-mortgage_data_monthly %>% autoplot(Average_rate, color = "#1277e1", size = 1) +
-                          labs(title = "30-Year Fixed US Mortgage Average Monthly Rate", subtitle = "February 2008 - August 2020") +
-                          xlab("Monthly data") + ylab("Mortgage rate")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Create a new dataframe
-mortgage <- cbind(chicago, mortgage_data_monthly$Average_rate)
-
-# Check dimensions
-dim(mortgage)
-
-# Rename
-# mortgage <- mortgage %>% rename(Monthly_rate = Average_rate)
-names(mortgage)[names(mortgage) == "mortgage_data_monthly$Average_rate"] <- "Average_rate"
-
-# Print
-kable(head(mortgage, n = 5)) %>% kable_styling() 
-```
-
-### Stationarity
-
-#### ACF
-
-```{r, message = FALSE, warning = FALSE}
-# Check autocorrelation
-ggAcf(chicago$Median_price)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check autocorrelation
-ggAcf(mortgage_data_monthly$Average_rate)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check autocorrelation
-ggAcf(log(chicago$Median_price))
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check autocorrelation
-ggAcf(log(mortgage_data_monthly$Average_rate))
-```
-
-As we can see, we have a strong autocorrelation in both cases - with initial and log data. 
-
-### Differencing
-
-#### 1st order differencing 
-
-```{r, message = FALSE, warning = FALSE}
-# 1st order for Median price
-Median_price_diff1 <- diff(chicago$Median_price, differences = 1)
-
-# ACF
-ggAcf(Median_price_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# 1st order for Average rate
-Average_rate_diff1 <- diff(mortgage_data_monthly$Average_rate, differences = 1)
-
-# ACF
-ggAcf(Average_rate_diff1)
-```
-
-After a first level differencing our median price data keeps a seasonal trend, but the average rate data looks better. 
-
-#### Tests for 1st order diff
-
-![](https://i.ibb.co/hK2j5FP/image.png)
-
-```{r, message = FALSE, warning = FALSE}
-kpss.test(Median_price_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-kpss.test(Average_rate_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-adf.test(Median_price_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-adf.test(Average_rate_diff1)
-```
-
-**According to our test results and the slide (106) by professor Abado, both variables are stationary.** 
-
-```{r, message = FALSE, warning = FALSE}
-length(chicago$Median_price)
-length(Median_price_diff1)
-```
-
-#### 2nd order differencing
-
-```{r, message = FALSE, warning = FALSE}
-# 2nd order for Median price
-Median_price_diff2 <- diff(chicago$Median_price, differences = 2)
-
-# ACF
-ggAcf(Median_price_diff2)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# 2nd order for Average rate
-Average_rate_diff2 <- diff(mortgage_data_monthly$Average_rate, differences = 2)
-
-# ACF
-ggAcf(Average_rate_diff2)
-```
-
-### Plot logs vs non-logs
-
-```{r, message = FALSE, warning = FALSE}
-# Check class
-class(mortgage)
-
-# Plot the correlation
-ggplot(mortgage, aes(Median_price, Average_rate)) +
-       geom_point(color = "maroon") +
-       geom_smooth(method = "lm", color = "darkgreen") +
-       labs(title = "Correlation of Median Sales Price and monthly average US mortgage rate",
-              subtitle = "February 2008 - August 2020") +
-       xlab("Median Sales Price") + ylab("Average mortgage rate")
+# Plot
+autoplot(Median_price_ts, color = "#1277e1", size = 1) +
+         labs(title = "Median Sale Price in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
+         xlab("Monthly data by year") + ylab("Median Sale Price")
 
 ```
 
+What can we see here?
+
+- Decreasing and increasing trends
+- Strong seasonality
+- Data fluctuation changes in magnitude
+
 ```{r, message = FALSE, warning = FALSE}
-# Plot the correlation
-ggplot(mortgage, aes(log(Median_price), log(Average_rate))) +
-       geom_point(color = "maroon") +
-       geom_smooth(method = "lm", color = "darkgreen") +
-       labs(title = "Correlation of log Median sales price and log monthly average US mortgage rate",
-              subtitle = "February 2008 - August 2020") +
-       xlab("Median Sales Price") + ylab("Average mortgage rate")
+# Split data into train and test
+Average_rate_ts <- ts(chicago_data$Average_rate, start = c(2008, 2), frequency = 12)
+
+# Print 
+Average_rate_ts
+
+# Plot
+autoplot(Average_rate_ts, color = "#1277e1", size = 1) +
+         labs(title = "Average Mortgage Rate in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
+         xlab("Monthly data by year") + ylab("Average rate")
 ```
 
-#### Plot log monthly mortgage data
+
+
+#### Split into train and test data
 
 ```{r, message = FALSE, warning = FALSE}
-# # Plot the initial data
-mortgage_data_monthly %>% autoplot(log(Average_rate), color = "#1277e1", size = 1) +
-                          labs(title = "30-Year Fixed US Mortgage Average Monthly Rate (log)", subtitle = "February 2008 - August 2020") +
-                          xlab("Monthly data") + ylab("log(Mortgage rate)")
+# Split train and test data for Median price
+Median_price_ts_train <- window(Median_price_ts, end = c(2018, 12), frequency = 12)
+Median_price_ts_test <- window(Median_price_ts, start = c(2019,1), end = c(2019,12), frequency = 12)
+
+# Split train and test data for Average rate
+Average_rate_ts_train <- ts(chicago_data$Average_rate, start = c(2008, 2), end = c(2014, 12), frequency = 12)
+Average_rate_ts_test <- ts(chicago_data$Average_rate, start = c(2015, 1), end = c(2016, 12), frequency = 12)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# # Plot the initial data
-chicago %>% autoplot(log(Median_price), color = "#1277e1", size = 1) +
-                         labs(title = "Median Sale Price in Chicago Metro Area (log)", subtitle = "February 2008 - August 2020") +
-                         xlab("Monthly data") + ylab("log(Median sale price)")
+# Create a window
+train_end <- c(2018, 12)
+test_start <- c(2019, 1)
+test_end <- c(2019, 12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Median_price_ts_train <- window(Median_price_ts, end = train_end)
+Median_price_ts_test <- window(Median_price_ts, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Average_rate_ts_train <- window(Average_rate_ts, end = train_end)
+Average_rate_ts_test <- window(Average_rate_ts, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation
+cor(Median_price_ts_train, Average_rate_ts_train)
 ```
 
 ### VAR model
 
-#### VAR modelling with `ts()`
+#### Stationarity
 
 ```{r, message = FALSE, warning = FALSE}
-# Define Median_price as ts
-Median_price_ts <- ts(chicago$Median_price, start = c(2008, 2), end = c(2020, 8), frequency = 12)
+# Check autocorrelation for Media price (train data)
+ggAcf(Median_price_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
 
-# Class
-class(Median_price_ts)
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation for Median price (train data)
+ggPacf(Median_price_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Average rate (train data)
+ggAcf(Average_rate_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Average rate (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation for Average rate (train data)
+ggPacf(Average_rate_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Average rate (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+As we can see, we have a strong autocorrelation in both cases. 
+
+#### Tests
+
+However, let;s check it formally with tests. 
+
+This is a slide from our Time Series class with Professor Abado as a reference. 
+
+![](https://i.ibb.co/hK2j5FP/image.png)
+
+```{r, message = FALSE, warning = FALSE}
+# Run KPSS test for Median price train data
+kpss.test(Median_price_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run KPSS test for Average rate train data
+kpss.test(Average_rate_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run ADF test for Average rate train data
+adf.test(Median_price_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run ADF test for Average rate train data
+adf.test(Average_rate_ts_train)
+```
+
+As we can see, both tests for both variables tell us that the process is not stationary. 
+
+#### VAR select
+
+Now we will use `VARselect` and try to find a model.
+
+```{r, message = FALSE, warning = FALSE}
+# VARselect
+model1 <- VARselect(cbind(Median_price_ts_train, Average_rate_ts_train))
 
 # Print
-print(Median_price_ts)
+model1
 ```
 
-```{r, message = FALSE, warning = FALSE}
-# Define Average_rate as ts
-Average_rate_ts <- ts(mortgage_data_monthly$Average_rate, start = c(2008, 2), end = c(2020, 8), frequency = 12)
+`VARselect` offers us to try model with p = 10
 
-# Print
-class(Average_rate_ts)
-
-# Print
-print(Average_rate_ts)
-```
+#### Model
 
 ```{r, message = FALSE, warning = FALSE}
-# Create a ts dataframe
-chicago_df_ts <- cbind(Median_price_ts, Average_rate_ts)
+# Var 10
+varmodel10 <- VAR(cbind(Median_price_ts_train, Average_rate_ts_train), p = 10, type = "both", season = 12) 
 
-# Check class
-class(chicago_df_ts)
-
-# Coerce class
-class(chicago_df_ts) <- c("mts", "ts")
-
-# Check class
-class(chicago_df_ts)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Use VAR select
-VARselect(chicago_df_ts)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Define a VAR(10) model ts
-var_10_model_ts <- VAR(chicago_df_ts, p = 10, type = "both", season = 12) 
+# Pormonteau test
+serial.test(varmodel10, lags.pt = 20, type = "PT.asymptotic") 
+# p-value = 0.06771
 
 # Print summary
-summary(var_10_model_ts)
+summary(varmodel10)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(2) model ts
-var_2_model_ts <- VAR(chicago_df_ts, p = 2, type = "both", season = 12) 
+# Check residuals for the model
+ggAcf(residuals(varmodel10)[, 1])
+```
 
-# Print summary
-summary(var_2_model_ts)
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel10_forecast <- ts(predict(varmodel10, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate model
+
+Now we can check our numbers in different metrics.
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel10_forecast, Median_price_ts_test)
+accuracy(varmodel10_forecast, Average_rate_ts_test)
+```
+
+We can see that our key metrics - such as MAE and RMSE are pretty high, hopefully we can achieve better results in our next models. 
+
+#### Cross-Validation
+
+```{r, message = FALSE, warning = FALSE}
+# Define parameters
+k <- 72 # Minimum observations (6 years)
+p <- 12 # Period
+st <- 2014 + 11/12
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(10) for Median_price_ts
-Median_price_ts_forecast_var_10 <- forecast(var_10_model_ts, h = 12)$forecast$Median_price_ts
+error <- matrix(NA, 36, 12)
+dates <- c()
+for(i in (1:36))
 
-# Plot the forecast
-autoplot(Median_price_ts_forecast_var_10) + 
-        labs(title = "VAR 10 model forecast for Median Sale Price", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Median Sale Price")
+# Create a function  
+{
+  train <- window(Median_price_ts, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts, start = st + (i + 1)/p, end = st+(i + 12)/p)
+  dates[i] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 10, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i, 1:length(test)] <- f - test
+}
+
+# Define and plot metrics
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l", col = 3, xlab = "Horizon", ylab = "Error", main = 'Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(10) for Average_rate_ts
-Average_rate_ts_forecast_var_10 <- forecast(var_10_model_ts, h = 12)$forecast$Average_rate_ts
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
 
-# Plot the forecast
-autoplot(Average_rate_ts_forecast_var_10) + 
-        labs(title = "VAR 10 model forecast for Average Mortgage Rate", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Average Mortgage Rate")
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(2) for Median_price_ts
-Median_price_ts_forecast_var_2 <- forecast(var_2_model_ts, h = 12)$forecast$Median_price_ts
+error <- matrix(NA, 12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Median_price_ts, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  dates[i - 36] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 10, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i - 36, 1:length(test)] <- f - test
+}
 
-# Plot the forecast
-autoplot(Median_price_ts_forecast_var_2) + 
-        labs(title = "VAR 2 model forecast for Median Sale Price", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Median Sale Price")
+# Define metrics and plot them  
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l",col = 3, xlab = "Horizon", ylab = "Error", main = 'Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(2) for Average_rate_ts
-Average_rate_ts_forecast_var_2 <- forecast(var_2_model_ts, h = 12)$forecast$Average_rate_ts
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
 
-# Plot the forecast
-autoplot(Average_rate_ts_forecast_var_2) + 
-        labs(title = "VAR 2 model forecast for Average Mortgage Rate", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Average Mortgage Rate")
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(10) for Median_price_ts
-checkresiduals(var_10_model_ts$varresult$Median_price_ts, test = "LB", color = "maroon")
+plot(f)
+points(test)
 ```
 
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(10) for Average_rate_ts
-checkresiduals(var_10_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
-```
+We can see that our prediction is not that accurate and we can do better here. 
+
+### VAR with Diff1
+
+**Important:** Here and in all other steps I replicate the first result, so there is a lot of repetition here, which is still important. 
+
+#### 1st order differencing
+
+First, we need to difference data (1st order).
 
 ```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(2) for Median_price_ts
-checkresiduals(var_2_model_ts$varresult$Median_price_ts, test = "LB", color = "maroon")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(2) for Average_rate_ts
-checkresiduals(var_2_model_ts$varresult$Average_rate_ts, test = "LB", color = "maroon")
-```
-
-#### VAR 1st order differenced
-
-```{r, message = FALSE, warning = FALSE}
-# First order differencing
+# Create new variables
 Median_price_ts_diff1 <- diff(Median_price_ts, differences = 1)
-
-# Print
-Median_price_diff1
-
-# Check class
-class(Median_price_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# First order differencing
 Average_rate_ts_diff1 <- diff(Average_rate_ts, differences = 1)
 
-# Print
-Average_rate_ts_diff1
-
 # Check class
+class(Median_price_ts_diff1)
 class(Average_rate_ts_diff1)
+
+# Print
+Median_price_ts_diff1
+Average_rate_ts_diff1
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Create a ts dataframe
-chicago_df_diff1_ts <- cbind(Median_price_ts_diff1, Average_rate_ts_diff1)
-
-# Check class
-class(chicago_df_diff1_ts)
-
-# Coerce class
-class(chicago_df_diff1_ts) <- c("mts", "ts")
-
-# Check class
-class(chicago_df_diff1_ts)
+# Define again train and test for Median price
+Median_price_ts_train_diff1 <- window(Median_price_ts_diff1, end = train_end)
+Median_price_ts_test_diff1 <- window(Median_price_ts_diff1, start = test_start, end = test_end)
 ```
 
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test for Average rate
+Average_rate_ts_train_diff1 <- window(Average_rate_ts_diff1, end = train_end)
+Average_rate_ts_test_diff1 <- window(Average_rate_ts_diff1, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation between differenced variables
+cor(Median_price_ts_train_diff1, Average_rate_ts_train_diff1)
+```
+
+We can see that our correltion dropped significantly after differencing - from `0.48` to `0.16`. 
+
+#### Stationarity
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Median_price_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Average_rate_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Average rate (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Average_rate_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Average rate (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+As we can see, we have a less strong autocorrelation in both cases, but it still exists, especially with Median price.  
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Average_rate_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Average_rate_ts_train_diff1)
+```
+
+As we can see, both tests for both variables tell us that the process is stationary. 
+
+#### VAR select
 
 ```{r, message = FALSE, warning = FALSE}
 # Use VAR select
-VARselect(chicago_df_diff1_ts)
+model1_diff1 <- VARselect(cbind(Median_price_ts_train_diff1, Average_rate_ts_train_diff1))
+
+# Print the model
+model1_diff1
 ```
 
-We can see that after the first level of differencing `VARselect` offers us different models. 
+`VARselect` offers us to try model with p = 8.
+
+#### Model
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(9) model ts diff1
-var_9_model_ts_diff1 <- VAR(chicago_df_diff1_ts, p = 9, type = "both", season = 12) 
+# Var 8
+varmodel8 <- VAR(cbind(Median_price_ts_train_diff1, Average_rate_ts_train_diff1), p = 8, type = "both", season = 12) 
 
-# Print summary
-summary(var_9_model_ts_diff1)
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Define a VAR(1) model ts
-var_1_model_ts_diff1 <- VAR(chicago_df_diff1_ts, p = 1, type = "both", season = 12) 
-
-# Print summary
-summary(var_1_model_ts_diff1)
-```
+# Pormonteau test
+serial.test(varmodel8, lags.pt = 20, type = "PT.asymptotic") 
+``` 
 
 ```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(9) for Median_price_ts
-Median_price_ts_forecast_var_9_diff1 <- forecast(var_9_model_ts_diff1, h = 12)$forecast$Median_price_ts_diff1
-
-# Plot the forecast
-autoplot(Median_price_ts_forecast_var_9_diff1) + 
-        labs(title = "VAR 9 model forecast for Median Sale Price (Diff1)", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Median Sale Price")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(9) for Average_rate_ts
-Average_rate_ts_forecast_var_9_diff1 <- forecast(var_9_model_ts_diff1, h = 12)$forecast$Average_rate_ts_diff1
-
-# Plot the forecast
-autoplot(Average_rate_ts_forecast_var_9_diff1) + 
-        labs(title = "VAR 9 model forecast for Average Mortgage Rate (Diff1)", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Average Mortgage Rate")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(1) for Median_price_ts
-Median_price_ts_forecast_var_1_diff1 <- forecast(var_1_model_ts_diff1, h = 12)$forecast$Median_price_ts_diff1
-
-# Plot the forecast
-autoplot(Median_price_ts_forecast_var_1_diff1) + 
-        labs(title = "VAR 1 model forecast for Median Sale Price (Diff1)", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Median Sale Price")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Fit the model VAR(1) for Average_rate_ts
-Average_rate_ts_forecast_var_1_diff1 <- forecast(var_1_model_ts_diff1, h = 12)$forecast$Average_rate_ts_diff1
-
-# Plot the forecast
-autoplot(Average_rate_ts_forecast_var_1_diff1) + 
-        labs(title = "VAR 1 model forecast for Average Mortgage Rate (Diff1)", subtitle = "February 2008 - August 2020") +
-        xlab("Monthly data") + ylab("Average Mortgage Rate")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(9) for Median_price_ts
-checkresiduals(var_9_model_ts_diff1$varresult$Median_price_ts_diff1, test = "LB", color = "maroon")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(9) for Average_rate_ts
-checkresiduals(var_9_model_ts_diff1$varresult$Average_rate_ts_diff1, test = "LB", color = "maroon")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(1) for Median_price_ts
-checkresiduals(var_1_model_ts_diff1$varresult$Median_price_ts_diff1, test = "LB", color = "maroon")
-```
-
-```{r, message = FALSE, warning = FALSE}
-# Check residuals for model VAr(1) for Average_rate_ts
-checkresiduals(var_1_model_ts_diff1$varresult$Average_rate_ts_diff1, test = "LB", color = "maroon")
-```
-
-### Var 2nd order differencing
-
-Here I will try to apply the second level differencing for both variables. 
-
-```{r, message = FALSE, warning = FALSE}
-# Second order differencing
-Median_price_ts_diff2 <- diff(Median_price_ts, differences = 2)
-
 # Print
-Median_price_diff2
-
-# Check class
-class(Median_price_diff2)
-
-# ACF
-ggAcf(Median_price_ts_diff2)
+summary(varmodel8)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# First order differencing
+# Check residuals for the model
+ggAcf(residuals(varmodel8)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel8_forecast <- ts(predict(varmodel8, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel8_forecast, Median_price_ts_test_diff1)
+accuracy(varmodel8_forecast, Average_rate_ts_test_diff1)
+```
+
+#### Cross-validation
+
+```{r, message = FALSE, warning = FALSE}
+# Define parameters
+k <- 72 # Minimum observations (6 years)
+p <- 12 # Period
+st <- 2014 + 11/12
+error <- matrix(NA, 36, 12)
+dates <- c()
+for(i in (1:36))
+
+# Create a function  
+{
+  train <- window(Median_price_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff1, start = st + (i + 1)/p, end = st+(i + 12)/p)
+  dates[i] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i, 1:length(test)] <- f - test
+}
+
+# Define and plot metrics
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l", col = 3, xlab = "Horizon", ylab = "Error", main = 'Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+error <- matrix(NA, 12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Median_price_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  dates[i - 36] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i - 36, 1:length(test)] <- f - test
+}
+
+# Define metrics and plot them  
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l",col = 3, xlab = "Horizon", ylab = "Error", main = 'Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Compare results
+plot(f)
+points(test)
+```
+
+### VAR with Diff2
+
+#### 2st order differencing
+
+Again, we need to difference data (2st order)
+
+```{r, message = FALSE, warning = FALSE}
+# Create new variables
+Median_price_ts_diff2 <- diff(Median_price_ts, differences = 2)
 Average_rate_ts_diff2 <- diff(Average_rate_ts, differences = 2)
 
-# Print
-Average_rate_ts_diff2
-
 # Check class
+class(Median_price_ts_diff2)
 class(Average_rate_ts_diff2)
 
-# ACF
-ggAcf(Average_rate_ts_diff2)
+# Print
+Median_price_ts_diff2
+Average_rate_ts_diff2
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Create a ts dataframe
-chicago_df_diff2_ts <- cbind(Median_price_ts_diff2, Average_rate_ts_diff2)
-
-# Check class
-class(chicago_df_diff2_ts)
-
-# Coerce class
-class(chicago_df_diff2_ts) <- c("mts", "ts")
-
-# Check class
-class(chicago_df_diff2_ts)
+# Define again train and test 
+Median_price_ts_train_diff2 <- window(Median_price_ts_diff2, end = train_end)
+Median_price_ts_test_diff2 <- window(Median_price_ts_diff2, start = test_start, end = test_end)
 ```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Average_rate_ts_train_diff2 <- window(Average_rate_ts_diff2, end = train_end)
+Average_rate_ts_test_diff2 <- window(Average_rate_ts_diff2, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation
+cor(Median_price_ts_train_diff2, Average_rate_ts_train_diff2)
+```
+
+We can see that our corrlation dropped slightly this time. 
+
+#### Stationarity
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Median price
+ggAcf(Median_price_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Average_rate_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Average rate (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Average_rate_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Average rate (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Average_rate_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Average_rate_ts_train_diff2)
+```
+
+#### VAR select
 
 ```{r, message = FALSE, warning = FALSE}
 # Use VAR select
-VARselect(chicago_df_diff2_ts)
+model1_diff2 <- VARselect(cbind(Median_price_ts_train_diff2, Average_rate_ts_train_diff2))
+
+# Print the model
+model1_diff2
+```
+
+`VARselect` offers us to try model with p = 10.
+
+#### Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 10
+varmodel10_diff2 <- VAR(cbind(Median_price_ts_train_diff2, Average_rate_ts_train_diff2), p = 10, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel10_diff2, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+summary(varmodel10_diff2)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(10) model ts
-var_10_model_ts_diff2 <- VAR(chicago_df_diff2_ts, p = 10, type = "both", season = 12) 
+# Check residuals for the model
+ggAcf(residuals(varmodel10_diff2)[, 1])
+```
 
-# Print summary
-summary(var_10_model_ts_diff2)
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel10_diff2_forecast <- ts(predict(varmodel10_diff2, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel10_diff2_forecast, Median_price_ts_test_diff2)
+accuracy(varmodel10_diff2_forecast, Average_rate_ts_test_diff2)
+```
+
+#### Cross-validation
+
+```{r, message = FALSE, warning = FALSE}
+# Define parameters
+k <- 72 # Minimum observations (6 years)
+p <- 12 # Period
+st <- 2014 + 11/12
+error <- matrix(NA, 36, 12)
+dates <- c()
+for(i in (1:36))
+
+# Create a function  
+{
+  train <- window(Median_price_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff2, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff2, start = st + (i + 1)/p, end = st+(i + 12)/p)
+  dates[i] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 10, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i, 1:length(test)] <- f - test
+}
+
+# Define and plot metrics
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l", col = 3, xlab = "Horizon", ylab = "Error", main = 'Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(2) model ts
-var_2_model_ts_diff2 <- VAR(chicago_df_diff2_ts, p = 2, type = "both", season = 12) 
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
 
-# Print summary
-summary(var_2_model_ts_diff2)
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
 ```
 
-As we can see, our model with the second order differencing performs even worse than 1st order, so it does not make sense to plot and forecast it for now. 
+```{r, message = FALSE, warning = FALSE}
+error <- matrix(NA, 12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Median_price_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff2, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff2, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  dates[i - 36] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i - 36, 1:length(test)] <- f - test
+}
 
-#### Log variables 
+# Define metrics and plot them  
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l",col = 3, xlab = "Horizon", ylab = "Error", main = 'Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
 
 ```{r, message = FALSE, warning = FALSE}
-# Create log variables
-Median_price_ts_log <- log(Median_price_ts)
-Average_rate_ts_log <- log(Average_rate_ts)
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+plot(f)
+points(test)
+```
+
+### VAR with Diff2-1
+
+#### 2nd and 1st order differencing
+
+Now I will try to apply different levels of differencing for variables. The median price will have the second order and the average rate will have the first one. 
+
+```{r, message = FALSE, warning = FALSE}
+# Create new variables
+Median_price_ts_diff2 <- diff(Median_price_ts, differences = 2)
+Average_rate_ts_diff1 <- diff(Average_rate_ts, differences = 1)
+
+# Check class
+class(Median_price_ts_diff2)
+class(Average_rate_ts_diff1)
 
 # Print
-head(Median_price_ts_log)
-head(Average_rate_ts_log)
+Median_price_ts_diff2
+Average_rate_ts_diff1
+```
+
+Now we need to remove one element from `Average_rate_ts_diff1` to make it equal. 
+
+```{r, message = FALSE, warning = FALSE}
+# Remove one element
+Average_rate_ts_diff1_cut <- window(Average_rate_ts_diff1, start = c(2008, 4))
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Use Var select
-var_df_ts_log <- VARselect(cbind(Median_price_ts_log, Average_rate_ts_log))
-
-# Print
-var_df_ts_log
+# Define again train and test 
+Median_price_ts_train_diff2 <- window(Median_price_ts_diff2, end = train_end)
+Median_price_ts_test_diff2 <- window(Median_price_ts_diff2, start = test_start, end = test_end)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(10) model ts
-var_10_model_ts_log <- VAR(cbind(Median_price_ts_log, Average_rate_ts_log), p = 10, type = "both", season = 12) 
-
-# Print summary
-summary(var_10_model_ts_log)
+# Define again train and test 
+Average_rate_ts_train_diff1_cut <- window(Average_rate_ts_diff1_cut, end = train_end)
+Average_rate_ts_test_diff1_cut <- window(Average_rate_ts_diff1_cut, start = test_start, end = test_end)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Define a VAR(2) model ts
-var_2_model_ts_log <- VAR(cbind(Median_price_ts_log, Average_rate_ts_log), p = 2, type = "both", season = 12) 
+# Check correlation
+cor(Median_price_ts_train_diff2, Average_rate_ts_train_diff1_cut)
+```
 
-# Print summary
-summary(var_2_model_ts_log)
+We can see that correlation between even less. 
+
+#### Stationarity
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Median_price_ts_train_diff2,color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Check residuals for VAR(10) log model
-ggAcf(residuals(var_10_model_ts_log)[, 1])
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
 ```
 
 ```{r, message = FALSE, warning = FALSE}
-# Check residuals for VAR(10) log model
-ggAcf(residuals(var_2_model_ts_log)[, 1])
+# Check autocorrelation
+ggAcf(Average_rate_ts_train_diff1_cut,color = "#1277e1", size = 1) +
+         labs(title = "ACF for Average rate (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
 ```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Average_rate_ts_train_diff1_cut, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+As we can see, we have a slightly less strong autocorrelation in both cases. 
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Average_rate_ts_train_diff1_cut)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Average_rate_ts_train_diff1_cut)
+```
+
+#### VAR select
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+model1_diff21 <- VARselect(cbind(Median_price_ts_train_diff2, Average_rate_ts_train_diff1_cut))
+
+# Print the model
+model1_diff21
+```
+
+`VARselect` offers us to try model with p = 10.
+
+#### Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 10
+varmodel10_diff21 <- VAR(cbind(Median_price_ts_train_diff2, Average_rate_ts_train_diff1_cut), p = 10, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel10_diff21, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+# Print model
+summary(varmodel10_diff21)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for the model
+ggAcf(residuals(varmodel10_diff21)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel10_diff21_forecast <- ts(predict(varmodel10_diff21, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel10_diff21_forecast, Median_price_ts_test_diff2)
+accuracy(varmodel10_diff21_forecast, Average_rate_ts_test_diff1_cut)
+```
+
+#### Cross-validation
+
+```{r, message = FALSE, warning = FALSE}
+# Define parameters
+k <- 72 # Minimum observations (6 years)
+p <- 12 # Period
+st <- 2014 + 11/12
+error <- matrix(NA, 36, 12)
+dates <- c()
+for(i in (1:36))
+
+# Create a function  
+{
+  train <- window(Median_price_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff2, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff1_cut, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff1_cut, start = st + (i + 1)/p, end = st+(i + 12)/p)
+  dates[i] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 10, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i, 1:length(test)] <- f - test
+}
+
+# Define and plot metrics
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l", col = 3, xlab = "Horizon", ylab = "Error", main = 'Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+error <- matrix(NA, 12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Median_price_ts_diff2, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff2, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Average_rate_ts_diff1_cut, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Average_rate_ts_diff1_cut, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  dates[i - 36] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i - 36, 1:length(test)] <- f - test
+}
+
+# Define metrics and plot them  
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l",col = 3, xlab = "Horizon", ylab = "Error", main = 'Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Compare
+plot(f)
+points(test)
+```
+
+### Conclusion
+
+We can see that our VAR model 10 with the 1st order of differencing gives us the best results. 
+
+```{r, message = FALSE, warning = FALSE}
+# Print accuracy again
+accuracy(varmodel8_forecast, Median_price_ts_test_diff1)
+accuracy(varmodel8_forecast, Average_rate_ts_test_diff1)
+```
+
+THis results are similar to the best results, obtained by other team members in their VAR and ARIMA models. 
 
 ### Useful resources
 
 - [StackOverflow - VAR methodology](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology/195477#195477)
+
+- [Forecasting methodology and k-fold cross validation for a vector autoregression](https://stats.stackexchange.com/questions/200598/forecasting-methodology-and-k-fold-cross-validation-for-a-vector-autoregression)
 
 - [Introduction to Econometrics with R - Vector Autoregressions](https://www.econometrics-with-r.org/16-1-vector-autoregressions.html)
 
@@ -714,11 +1019,6 @@ ggAcf(residuals(var_2_model_ts_log)[, 1])
 - [VAR model tutorial](https://rpubs.com/bostonchopsticks/405570)
 
 - [Presentation](http://www.ams.sunysb.edu/~zhu/ams586/VAR_Lecture2.pdf)
-
-
-
-
-
 
 
 
