@@ -1,0 +1,778 @@
+---
+title: "TS Zillow Team Project (VAR CV model)"
+author: "Oleksiy Anokhin"
+date: "10/29/2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 5
+---
+
+### Intro
+
+#### Packages
+
+```{r, message = FALSE, warning = FALSE}
+# Install packages
+library(tidyverse) # for general analysis
+library(fpp)
+# library(fpp2)
+library(fpp3) # for predictions 
+# Important notice: the latest package here is fpp3, but it does not work well sometimes with 'ts' data. 
+# https://stackoverflow.com/questions/64348121/error-objects-of-type-ts-not-supported-by-autoplot-cannot-knit-rmarkdown-pack
+# For example, I cannot use 'autoplot()' function for such data
+# Hence, I will use fpp2 for this assignment
+library(ggthemes) # for beautiful themes
+# library(tinytex) # for pdf documents
+# library(highcharter) # for beautiful charts
+library(TSA) # for TS analysis
+# library(readxl) # for xls files
+library(kableExtra) # for beautiful tables
+library(lubridate) # for time data
+library(tsibble) # for tsiblle data format
+# library(plotly) # for interactive charts
+library(caret) # for modeling
+library(prophet) # for TS analysis
+library(lubridate)
+library(zoo)
+library(vars)
+library(stats)
+# library(forecast)
+library(urca)
+library(stats)
+
+# Set a theme
+theme_set(theme_minimal())
+
+# Remove scientific notations for prices
+options(scipen = 999)
+``` 
+
+#### Import data
+
+This dataset was aggregated from two different datasets - Median Sale Price in Chicago (Zillow) and &P/Case-Shiller IL-Chicago Home Price Index in Chicago area.
+
+```{r, message = FALSE, warning = FALSE}
+# Read data
+chicago_data <- read_csv("VAR data.csv")
+
+# Print
+head(chicago_data)
+```
+#### EDA
+
+```{r, message = FALSE, warning = FALSE}
+# Split data into train and test
+Median_price_ts <- ts(chicago_data$Median_price, start = c(2008, 2), frequency = 12)
+
+# Print 
+Median_price_ts
+
+# Plot
+autoplot(Median_price_ts, color = "#1277e1", size = 1) +
+         labs(title = "Median Sale Price in Chicago Metro Area", subtitle = "February 2008 - August 2020") +
+         xlab("Monthly data by year") + ylab("Median Sale Price")
+
+```
+
+What can we see here?
+
+- Decreasing and increasing trends
+- Strong seasonality
+- Data fluctuation changes in magnitude
+
+```{r, message = FALSE, warning = FALSE}
+# Split data into train and test
+Index_ts <- ts(chicago_data$Home_price_index, start = c(2008, 2), frequency = 12)
+
+# Print 
+Index_ts
+
+# Plot
+autoplot(Index_ts, color = "#1277e1", size = 1) +
+         labs(title = "S&P/Case-Shiller IL-Chicago Home Price Index", subtitle = "February 2008 - August 2020") +
+         xlab("Monthly data by year") + ylab("Average rate")
+```
+
+#### Split into train and test data
+
+```{r, message = FALSE, warning = FALSE}
+# Split train and test data for Median price
+Median_price_ts_train <- window(Median_price_ts, end = c(2018, 12), frequency = 12)
+Median_price_ts_test <- window(Median_price_ts, start = c(2019,1), end = c(2019,12), frequency = 12)
+
+# Split train and test data for Index
+Index_ts_train <- ts(Index_ts, start = c(2008, 2), end = c(2014, 12), frequency = 12)
+Index_ts_test <- ts(Index_ts, start = c(2015, 1), end = c(2016, 12), frequency = 12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Create a window
+train_end <- c(2018, 12)
+test_start <- c(2019, 1)
+test_end <- c(2019, 12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Median_price_ts_train <- window(Median_price_ts, end = train_end)
+Median_price_ts_test <- window(Median_price_ts, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Index_ts_train <- window(Index_ts, end = train_end)
+Index_ts_test <- window(Index_ts, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation 
+cor(Median_price_ts, Index_ts)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation for train data
+cor(Median_price_ts_train, Index_ts_train)
+```
+
+We can see that correlation is very high and very positive. 
+
+### VAR model
+
+#### Stationarity
+
+First, we need to check if our data is stationary. 
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Median price (train data)
+ggAcf(Median_price_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation for Median price (train data)
+ggPacf(Median_price_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Index (train data)
+ggAcf(Index_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "ACF for S&P/Case-Shiller Home Price Index (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation for Index (train data)
+ggPacf(Index_ts_train, color = "#1277e1", size = 1) +
+         labs(title = "PACF for S&P/Case-Shiller Home Price Index (train) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+As we can see, we have a strong autocorrelation in both cases. 
+
+#### Tests
+
+However, let's check it formally with tests. 
+
+This is a slide from our Time Series class with Professor Abado as a reference. 
+
+![](https://i.ibb.co/hK2j5FP/image.png)
+
+```{r, message = FALSE, warning = FALSE}
+# Run KPSS test for Median price train data
+kpss.test(Median_price_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run KPSS test for Average rate train data
+kpss.test(Index_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run ADF test for Average rate train data
+adf.test(Median_price_ts_train)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Run ADF test for Average rate train data
+adf.test(Index_ts_train)
+```
+
+As we can see, both tests for both variables tell us that the process is not stationary. However, ADF test for Index data tells us the opposite. 
+
+### VAR with Diff1
+
+**Important:** Here and in all other steps I replicate the first result, so there is a lot of repetition here, which is still important. 
+
+#### 1st order differencing
+
+First, we need to difference data (1st order).
+
+```{r, message = FALSE, warning = FALSE}
+# Create new variables
+Median_price_ts_diff1 <- diff(diff(Median_price_ts, differences = 1), lag = 12, differences = 1)
+Index_ts_diff1 <- diff(diff(Index_ts, differences = 1), lag = 12, differences = 1)
+
+# Check class
+class(Median_price_ts_diff1)
+class(Index_ts_diff1)
+
+# Print
+Median_price_ts_diff1
+Index_ts_diff1
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test for Median price
+Median_price_ts_train_diff1 <- window(Median_price_ts_diff1, end = train_end)
+Median_price_ts_test_diff1 <- window(Median_price_ts_diff1, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test for Index
+Index_ts_train_diff1 <- window(Index_ts_diff1, end = train_end)
+Index_ts_test_diff1 <- window(Index_ts_diff1, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation between differenced variables
+cor(Median_price_ts_train_diff1, Index_ts_train_diff1)
+```
+
+We can see that our correlation dropped significantly after differencing - from `0.9` to `0.1`. 
+
+#### Stationarity
+
+Now we need to check the stationarity again. 
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Median_price_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+Here we have spikes at lags 1, 11, 12, 18. 
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Index_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Index (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+Here we have spikes at lags 1-4 and 12. 
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Index_ts_train_diff1, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Index (train diff1) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+As we can see, we have a weaker autocorrelation and partial autocorrelation in both cases, but it still exists, especially with Median price.  
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Index_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Index_ts_train_diff1)
+```
+
+As we can see, we have some controversial results here. 
+
+![](https://i.ibb.co/hK2j5FP/image.png)
+
+In our case we for Median price we have large p-values for both variables in a KPSS test. In ADF for Median price p-value is small (which is good), but it is high for Index variable. However, the p-value is only around 0.06, which can be considered acceptable. 
+
+#### VAR select
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+model1_diff1 <- VARselect(cbind(Median_price_ts_train_diff1, Index_ts_train_diff1))
+
+# Print the model
+model1_diff1
+```
+
+`VARselect` offers us to try model with p = 6.
+
+#### VAR(6) Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 8
+varmodel6 <- VAR(cbind(Median_price_ts_train_diff1, Index_ts_train_diff1), p = 6, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel6, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+# Print
+summary(varmodel6)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for the model
+ggAcf(residuals(varmodel6)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel6_forecast <- ts(predict(varmodel6, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel6_forecast, Median_price_ts_test_diff1)
+accuracy(varmodel6_forecast, Index_ts_test_diff1)
+```
+
+#### Cross-validation
+
+```{r, message = FALSE, warning = FALSE}
+# Define parameters
+k <- 72 # Minimum observations (6 years)
+p <- 12 # Period
+st <- 2014 + 11/12
+error <- matrix(NA, 36, 12)
+dates <- c()
+for(i in (1:36))
+
+# Create a function  
+{
+  train <- window(Median_price_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Index_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Index_ts_diff1, start = st + (i + 1)/p, end = st+(i + 12)/p)
+  dates[i] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i, 1:length(test)] <- f - test
+}
+
+# Define and plot metrics
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l", col = 3, xlab = "Horizon", ylab = "Error", main = 'Cross Validation Results: 1/31/2016 to 12/31/2018') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+error <- matrix(NA, 12, 12)
+dates <- c()
+for(i in (37:48))
+  
+{
+  train <- window(Median_price_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  test <- window(Median_price_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  rate_train <- window(Index_ts_diff1, start = st + (i - k + 1)/p, end = st + i/p)
+  rate_test <- window(Index_ts_diff1, start = st + (i + 1)/p, end = st + (i + 12)/p)
+  dates[i - 36] <- st + (i + 12)/p
+  var_model <-  VAR(cbind(train, rate_train), p = 8, type = "both", season = 12)
+  
+  f <- ts(predict(var_model, n.ahead = 12, ci = .95)$fcst$train[, 1], start = st + (i + 1)/p, frequency = 12)
+  error[i - 36, 1:length(test)] <- f - test
+}
+
+# Define metrics and plot them  
+MAE <- colMeans(abs(error), na.rm = TRUE)
+RMSE <- sqrt(colMeans(error**2, na.rm = TRUE))
+plot(1:12, RMSE, type = "l",col = 3, xlab = "Horizon", ylab = "Error", main = 'Test Set Results: 1/31/2019 to 12/31/2019') 
+lines(1:12, MAE, type = "l", col = 2)
+legend("topright", legend = c("RMSE", "MAE"), col = 1:4, lty = 1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Print metrics
+print(MAE)
+print(RMSE)
+print(sum(MAE)/12)
+print(sum(RMSE)/12)
+
+# Plot residuals
+plot(dates, error[, 12], ylab = 'Residual', main = 'Residuals from 12 Month Horizon')
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Compare results
+plot(f)
+points(test)
+```
+
+#### VAR(1) Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 8
+varmodel1 <- VAR(cbind(Median_price_ts_train_diff1, Index_ts_train_diff1), p = 1, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel1, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+# Print
+summary(varmodel1)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for the model
+ggAcf(residuals(varmodel1)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel1_forecast <- ts(predict(varmodel1, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel1_forecast, Median_price_ts_test_diff1)
+accuracy(varmodel1_forecast, Index_ts_test_diff1)
+```
+
+This model performs worse, so I will not do any cross-validation.
+
+#### Cross-validation
+
+TBD
+
+### VAR with Diff2
+
+#### 2st order differencing
+
+Again, we need to difference data (2st order)
+
+```{r, message = FALSE, warning = FALSE}
+# Create new variables
+Median_price_ts_diff2 <- diff(diff(Median_price_ts, differences = 2), lag = 12, differences = 2)
+Index_ts_diff2 <- diff(diff(Index_ts, differences = 2), lag = 12, differences = 2)
+
+# Check class
+class(Median_price_ts_diff2)
+class(Index_ts_diff2)
+
+# Print
+Median_price_ts_diff2
+Index_ts_diff2
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Median_price_ts_train_diff2 <- window(Median_price_ts_diff2, end = train_end)
+Median_price_ts_test_diff2 <- window(Median_price_ts_diff2, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Index_ts_train_diff2 <- window(Index_ts_diff2, end = train_end)
+Index_ts_test_diff2 <- window(Index_ts_diff2, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation
+cor(Median_price_ts_train_diff2, Index_ts_train_diff2)
+```
+
+We can see that our correlation dropped slightly this time and became negative. 
+
+#### Stationarity
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Median price
+ggAcf(Median_price_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Index_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Index (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Index_ts_train_diff2, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Index (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Index_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Index_ts_train_diff2)
+```
+
+Here both tests tell us that our data is stationary. 
+
+#### VAR select
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+model1_diff2 <- VARselect(cbind(Median_price_ts_train_diff2, Index_ts_train_diff2))
+
+# Print the model
+model1_diff2
+```
+
+`VARselect` offers us to try model with p = 10.
+
+#### Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 10
+varmodel10_diff2 <- VAR(cbind(Median_price_ts_train_diff2, Index_ts_train_diff2), p = 10, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel10_diff2, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+summary(varmodel10_diff2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for the model
+ggAcf(residuals(varmodel10_diff2)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel10_diff2_forecast <- ts(predict(varmodel10_diff2, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel10_diff2_forecast, Median_price_ts_test_diff2)
+accuracy(varmodel10_diff2_forecast, Index_ts_test_diff2)
+```
+
+We can see that our evaluation metrics look much worse. 
+
+### VAR with Diff1-2
+
+#### 2st order differencing
+
+Again, we need to difference data (2st order for seasonality and 1 order for trend)
+
+```{r, message = FALSE, warning = FALSE}
+# Create new variables
+Median_price_ts_diff12 <- diff(diff(Median_price_ts, differences = 1), lag = 12, differences = 2)
+Index_ts_diff12 <- diff(diff(Index_ts, differences = 1), lag = 12, differences = 2)
+
+# Check class
+class(Median_price_ts_diff12)
+class(Index_ts_diff12)
+
+# Print
+Median_price_ts_diff12
+Index_ts_diff12
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Median_price_ts_train_diff12 <- window(Median_price_ts_diff12, end = train_end)
+Median_price_ts_test_diff12 <- window(Median_price_ts_diff12, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Define again train and test 
+Index_ts_train_diff12 <- window(Index_ts_diff12, end = train_end)
+Index_ts_test_diff12 <- window(Index_ts_diff12, start = test_start, end = test_end)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check correlation
+cor(Median_price_ts_train_diff12, Index_ts_train_diff12)
+```
+
+We can see that our correlation dropped slightly but remains positive. 
+
+#### Stationarity
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation for Median price
+ggAcf(Median_price_ts_train_diff12, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Median price (train diff12) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Median_price_ts_train_diff12, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Median price (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check autocorrelation
+ggAcf(Index_ts_train_diff12, color = "#1277e1", size = 1) +
+         labs(title = "ACF for Index (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check partial autocorrelation
+ggPacf(Index_ts_train_diff12, color = "#1277e1", size = 1) +
+         labs(title = "PACF for Index (train diff2) in Chicago Metro Area", subtitle = "February 2008 - August 2020")
+```
+
+#### Tests
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Median_price_ts_train_diff12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+kpss.test(Index_ts_train_diff12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Median_price_ts_train_diff12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+adf.test(Index_ts_train_diff12)
+```
+
+In general, our process is stationary, but again ADF test p-value is a bit high. 
+
+#### VAR select
+
+```{r, message = FALSE, warning = FALSE}
+# Use VAR select
+model1_diff12 <- VARselect(cbind(Median_price_ts_train_diff12, Index_ts_train_diff12))
+
+# Print the model
+model1_diff12
+```
+
+`VARselect` offers us to try model with p = 10.
+
+#### Model
+
+```{r, message = FALSE, warning = FALSE}
+# Var 10
+varmodel10_diff12 <- VAR(cbind(Median_price_ts_train_diff12, Index_ts_train_diff12), p = 10, type = "both", season = 12) 
+
+# Pormonteau test
+serial.test(varmodel10_diff12, lags.pt = 20, type = "PT.asymptotic") 
+``` 
+
+```{r, message = FALSE, warning = FALSE}
+summary(varmodel10_diff12)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Check residuals for the model
+ggAcf(residuals(varmodel10_diff12)[, 1])
+```
+
+#### Forecast
+
+```{r, message = FALSE, warning = FALSE}
+# Create a forecast
+varmodel10_diff12_forecast <- ts(predict(varmodel10_diff12, n.ahead = 12, ci = .95)$fcst$Median_price_ts_train[, 1], start = test_start, frequency = 12)
+```
+
+#### Evaluate the model
+
+```{r, message = FALSE, warning = FALSE}
+# Analyze accuracy
+accuracy(varmodel10_diff12_forecast, Median_price_ts_test_diff2)
+accuracy(varmodel10_diff12_forecast, Index_ts_test_diff2)
+```
+
+WE can see that our data looks even worse. 
+
+### Conclusion
+
+We can see that our VAR model 10 with the 1st order of differencing gives us the best results. 
+
+```{r, message = FALSE, warning = FALSE}
+# Print accuracy again
+accuracy(varmodel6_forecast, Median_price_ts_test_diff1)
+accuracy(varmodel6_forecast, Index_ts_test_diff1)
+```
+
+This result is much worse than our first model. 
+
+### Useful resources
+
+- [StackOverflow - VAR methodology](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology/195477#195477)
+
+- [Forecasting methodology and k-fold cross validation for a vector autoregression](https://stats.stackexchange.com/questions/200598/forecasting-methodology-and-k-fold-cross-validation-for-a-vector-autoregression)
+
+- [Introduction to Econometrics with R - Vector Autoregressions](https://www.econometrics-with-r.org/16-1-vector-autoregressions.html)
+
+- [Forecasting: Principles and Practice](https://otexts.com/fpp3/VAR.html)
+
+- [Penn State - Vector Autoregressive models VAR(p) models](https://online.stat.psu.edu/stat510/lesson/11/11.2)
+
+- [VAR model tutorial](https://rpubs.com/bostonchopsticks/405570)
+
+- [Presentation](http://www.ams.sunysb.edu/~zhu/ams586/VAR_Lecture2.pdf)
+
+- [Applied Time Series Analysis for Fisheries and Environmental Sciences](https://nwfsc-timeseries.github.io/atsa-labs/sec-tslab-differencing-to-remove-a-trend-or-seasonal-effects.html)
+
+
+
+
+
+
+
+
+
