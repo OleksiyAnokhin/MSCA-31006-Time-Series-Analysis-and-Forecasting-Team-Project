@@ -11,3 +11,9 @@ Team:
 **Michael Thompson** [mthomp12@uchicago.edu](mthomp12@uchicago.edu)
 
 **Oleksiy Anokhin** [anokhin@uchicago.edu](anokhin@uchicago.edu)
+
+<center>
+
+![](https://imagizer.imageshack.com/img923/7617/bIomdp.png)
+
+</center>
